@@ -1,0 +1,504 @@
+name: Reusable ECS Pipeline
+
+on:
+  workflow_call:
+    inputs:
+      deployment_name:
+        description: 'Nome do deployment (ECR repo e ECS service)'
+        required: true
+        type: string
+      service_type:
+        description: 'Tipo de serviço: api ou worker'
+        required: true
+        type: string
+      context:
+        description: 'Contexto: inbound, outbound ou platform (define qual ECR usar)'
+        required: true
+        type: string
+      ecr_registry:
+        description: 'URL do registry ECR para este contexto (ex.: vars.ECR_REGISTRY_INBOUND)'
+        required: true
+        type: string
+      environment:
+        description: 'Ambiente (dev|qa|sbx|prd); caller passa github.ref_name'
+        required: true
+        type: string
+      use_default_dockerfile:
+        description: 'true = Dockerfile do repo de templates (build/); false = do repo da aplicação'
+        required: false
+        type: boolean
+        default: true
+      templates_repo:
+        description: 'Repo dos templates (ex.: org/github-ecs); usado quando use_default_dockerfile=true'
+        required: false
+        type: string
+        default: ''
+      templates_ref:
+        description: 'Branch/tag do repo de templates (ex.: main)'
+        required: false
+        type: string
+        default: 'main'
+      project_name:
+        description: 'Nome do projeto .csproj (para Dockerfile padrão; ex.: Inbound.Nfe.Api.EnvioXml)'
+        required: false
+        type: string
+        default: ''
+      dotnet_version:
+        description: 'Versão do .NET SDK'
+        required: false
+        type: string
+        default: '8.0'
+      working_directory:
+        description: 'Diretório do código fonte'
+        required: false
+        type: string
+        default: 'src'
+      dockerfile_path:
+        description: 'Caminho do Dockerfile (vazio = ./Dockerfile.<service_type> ou ./Dockerfile)'
+        required: false
+        type: string
+        default: ''
+      aws_region:
+        description: 'Região AWS'
+        required: false
+        type: string
+        default: 'us-east-1'
+      ecs_cluster:
+        description: 'Nome do cluster ECS (vazio = usa secret ECS_CLUSTER)'
+        required: false
+        type: string
+        default: ''
+      ecs_service:
+        description: 'Nome do service ECS (vazio = deployment_name)'
+        required: false
+        type: string
+        default: ''
+      ecr_repository:
+        description: 'Nome do repositório ECR (vazio = deployment_name)'
+        required: false
+        type: string
+        default: ''
+      # --- ECS / Fargate: task definition e rede ---
+      ecs_task_execution_role_arn:
+        description: 'ARN da role de execução da task (obrigatório para criar/registrar task definition)'
+        required: false
+        type: string
+        default: ''
+      ecs_task_role_arn:
+        description: 'ARN da role da task (opcional)'
+        required: false
+        type: string
+        default: ''
+      task_cpu:
+        description: 'CPU para Fargate (256, 512, 1024, 2048, 4096)'
+        required: false
+        type: string
+        default: '256'
+      task_memory:
+        description: 'Memória em MB para Fargate (512, 1024, 2048, 4096, 8192)'
+        required: false
+        type: string
+        default: '512'
+      vpc_id:
+        description: 'ID da VPC (para create-service; opcional se usar secret)'
+        required: false
+        type: string
+        default: ''
+      subnet_ids:
+        description: 'IDs das subnets separados por vírgula (ex.: subnet-1,subnet-2)'
+        required: false
+        type: string
+        default: ''
+      security_group_ids:
+        description: 'IDs dos security groups separados por vírgula'
+        required: false
+        type: string
+        default: ''
+      assign_public_ip:
+        description: 'Atribuir IP público (ENABLED/DISABLED) para Fargate'
+        required: false
+        type: string
+        default: 'DISABLED'
+      desired_count:
+        description: 'Número desejado de tasks (para create-service)'
+        required: false
+        type: string
+        default: '1'
+      # --- API: Load Balancer (ignorado para worker) ---
+      load_balancer_target_group_arn:
+        description: 'ARN do target group do ALB (apenas service_type=api; worker não usa LB)'
+        required: false
+        type: string
+        default: ''
+      load_balancer_name:
+        description: 'Nome do LB (referência/documentação; ex.: invoisys.com.br)'
+        required: false
+        type: string
+        default: ''
+      listener_path_pattern:
+        description: 'Path(s) no listener (referência; ex.: /api/nfe/* ou /api/nfe/*,/api/cte/*)'
+        required: false
+        type: string
+        default: ''
+      container_name:
+        description: 'Nome do container na task definition (para mapear ao LB; default: app)'
+        required: false
+        type: string
+        default: 'app'
+      container_port:
+        description: 'Porta do container exposta ao ALB'
+        required: false
+        type: string
+        default: '80'
+      # --- Fim ECS/LB ---
+      enable_health_check:
+        description: 'Executar health check HTTP pós-deploy (opcional)'
+        required: false
+        type: boolean
+        default: false
+      health_check_url:
+        description: 'URL do health check (ex.: https://api-dev.example.com/health)'
+        required: false
+        type: string
+        default: ''
+    secrets:
+      AWS_ACCESS_KEY_ID:
+        required: true
+      AWS_SECRET_ACCESS_KEY:
+        required: true
+      ECS_CLUSTER:
+        required: false
+      ECS_SERVICE:
+        required: false
+      ECS_TASK_EXECUTION_ROLE_ARN:
+        required: false
+      REPO_ACCESS_TOKEN:
+        required: false
+    outputs:
+      image_digest:
+        description: 'Digest da imagem no ECR'
+        value: ${{ jobs.pipeline.outputs.image_digest }}
+      image_tag:
+        description: 'Tag da imagem (SHA)'
+        value: ${{ jobs.pipeline.outputs.image_tag }}
+      deployed_service_arn:
+        description: 'ARN do service ECS atualizado ou criado'
+        value: ${{ jobs.pipeline.outputs.deployed_service_arn }}
+      task_definition_arn:
+        description: 'ARN da task definition registrada neste deploy (para rollback)'
+        value: ${{ jobs.pipeline.outputs.task_definition_arn }}
+
+jobs:
+  pipeline:
+    name: Build, Test, Docker, ECR, ECS
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    continue-on-error: false
+    outputs:
+      image_digest: ${{ steps.ecr-push.outputs.image_digest }}
+      image_tag: ${{ steps.ecr-push.outputs.image_tag }}
+      deployed_service_arn: ${{ steps.ecs-deploy.outputs.service_arn }}
+      task_definition_arn: ${{ steps.ecs-deploy.outputs.task_definition_arn }}
+
+    steps:
+      - name: Validar ambiente e contexto
+        id: validate
+        run: |
+          ENV="${{ inputs.environment }}"
+          case "$ENV" in
+            dev|qa|sbx|prd) echo "✅ Ambiente válido: $ENV" ;;
+            *) echo "❌ Ambiente inválido: $ENV"; exit 1 ;;
+          esac
+          CTX="${{ inputs.context }}"
+          case "$CTX" in
+            inbound|outbound|platform) echo "✅ Contexto válido: $CTX" ;;
+            *) echo "❌ Contexto inválido: $CTX"; exit 1 ;;
+          esac
+          ECR_REPO="${{ inputs.ecr_repository }}"
+          [ -z "$ECR_REPO" ] && ECR_REPO="${{ inputs.deployment_name }}"
+          echo "ecr_repository=${ECR_REPO}" >> $GITHUB_OUTPUT
+          echo "ecr_registry=${{ inputs.ecr_registry }}" >> $GITHUB_OUTPUT
+          SERVICE_NAME="${{ inputs.ecs_service }}"
+          [ -z "$SERVICE_NAME" ] && SERVICE_NAME="${{ inputs.deployment_name }}"
+          echo "ecs_service=${SERVICE_NAME}" >> $GITHUB_OUTPUT
+
+      - name: Checkout aplicação
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ inputs.dotnet_version }}
+
+      - name: Cache NuGet
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles(format('{0}/**/*.csproj', inputs.working_directory)) }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Restore
+        working-directory: ${{ inputs.working_directory }}
+        run: dotnet restore
+
+      - name: Test
+        working-directory: ${{ inputs.working_directory }}
+        run: dotnet test --no-restore --verbosity normal
+
+      - name: Checkout templates (Dockerfile padrão)
+        if: inputs.use_default_dockerfile == true && inputs.templates_repo != ''
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.templates_repo }}
+          ref: ${{ inputs.templates_ref }}
+          path: .ci-templates
+          token: ${{ secrets.REPO_ACCESS_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Definir caminho do Dockerfile
+        id: dockerfile-path
+        run: |
+          if [ "${{ inputs.use_default_dockerfile }}" = "true" ] && [ -n "${{ inputs.templates_repo }}" ]; then
+            echo "dockerfile=.ci-templates/build/Dockerfile.${{ inputs.service_type }}" >> $GITHUB_OUTPUT
+            echo "✅ Usando Dockerfile padrão do repo de templates (build/Dockerfile.${{ inputs.service_type }})"
+          else
+            CUSTOM="${{ inputs.dockerfile_path }}"
+            [ -z "$CUSTOM" ] && CUSTOM="Dockerfile.${{ inputs.service_type }}"
+            [ -z "$CUSTOM" ] && CUSTOM="Dockerfile"
+            echo "dockerfile=${CUSTOM}" >> $GITHUB_OUTPUT
+            echo "✅ Usando Dockerfile do repo da aplicação: ${CUSTOM}"
+          fi
+
+      - name: Build Docker image
+        id: docker-build
+        run: |
+          BUILD_ARGS=""
+          if [ -n "${{ inputs.project_name }}" ]; then
+            BUILD_ARGS="--build-arg PROJECT_NAME=${{ inputs.project_name }}"
+          fi
+          docker build -t ci-build -f ${{ steps.dockerfile-path.outputs.dockerfile }} $BUILD_ARGS .
+          echo "✅ Image built locally (tag: ci-build)"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ inputs.aws_region }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Tag and Push to ECR
+        id: ecr-push
+        env:
+          ECR_REPO: ${{ steps.validate.outputs.ecr_repository }}
+          REGISTRY: ${{ steps.validate.outputs.ecr_registry }}
+          CONTEXT: ${{ inputs.context }}
+        run: |
+          FULL_IMAGE="${REGISTRY}/${ECR_REPO}:${{ github.sha }}"
+          docker tag ci-build "$FULL_IMAGE"
+          docker push "$FULL_IMAGE"
+          docker tag ci-build "${REGISTRY}/${ECR_REPO}:${{ github.ref_name }}"
+          docker push "${REGISTRY}/${ECR_REPO}:${{ github.ref_name }}"
+          docker tag ci-build "${REGISTRY}/${ECR_REPO}:${CONTEXT}"
+          docker push "${REGISTRY}/${ECR_REPO}:${CONTEXT}"
+          TIMESTAMP_TAG="$(date -u +%Y%m%d-%H%M%S)"
+          docker tag ci-build "${REGISTRY}/${ECR_REPO}:${TIMESTAMP_TAG}"
+          docker push "${REGISTRY}/${ECR_REPO}:${TIMESTAMP_TAG}"
+          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' ci-build | cut -d'@' -f2)
+          echo "image_digest=${DIGEST}" >> $GITHUB_OUTPUT
+          echo "image_tag=${{ github.sha }}" >> $GITHUB_OUTPUT
+          echo "✅ Pushed $FULL_IMAGE (context: $CONTEXT)"
+
+      - name: Registrar nova Task Definition e Deploy (criar ou atualizar service)
+        id: ecs-deploy
+        env:
+          CLUSTER: ${{ inputs.ecs_cluster || secrets.ECS_CLUSTER }}
+          SERVICE: ${{ steps.validate.outputs.ecs_service }}
+          REGISTRY: ${{ steps.validate.outputs.ecr_registry }}
+          ECR_REPO: ${{ steps.validate.outputs.ecr_repository }}
+          IMAGE_TAG: ${{ steps.ecr-push.outputs.image_tag }}
+          TASK_EXEC_ROLE: ${{ inputs.ecs_task_execution_role_arn || secrets.ECS_TASK_EXECUTION_ROLE_ARN }}
+          TASK_ROLE: ${{ inputs.ecs_task_role_arn }}
+          CONTAINER_NAME: ${{ inputs.container_name || 'app' }}
+          CONTAINER_PORT: ${{ inputs.container_port || '80' }}
+          SUBNET_IDS: ${{ inputs.subnet_ids }}
+          SECURITY_GROUPS: ${{ inputs.security_group_ids }}
+          DESIRED_COUNT: ${{ inputs.desired_count || '1' }}
+          ASSIGN_PUBLIC_IP: ${{ inputs.assign_public_ip || 'DISABLED' }}
+          TARGET_GROUP_ARN: ${{ inputs.load_balancer_target_group_arn }}
+          SERVICE_TYPE: ${{ inputs.service_type }}
+          AWS_REGION: ${{ inputs.aws_region }}
+        run: |
+          set -e
+          FULL_IMAGE="${REGISTRY}/${ECR_REPO}:${IMAGE_TAG}"
+          echo "🖼️ Imagem: $FULL_IMAGE"
+          if [ -z "$CLUSTER" ] || [ -z "$SERVICE" ]; then
+            echo "❌ ECS cluster e service são obrigatórios (inputs ecs_cluster/ecs_service ou secrets ECS_CLUSTER/ECS_SERVICE)"
+            exit 1
+          fi
+          if [ -z "$TASK_EXEC_ROLE" ]; then
+            echo "❌ Role de execução obrigatória (input ecs_task_execution_role_arn ou secret ECS_TASK_EXECUTION_ROLE_ARN)"
+            exit 1
+          fi
+
+          # Família da task definition = nome do service (revisões acumulam por deploy; facilita rollback)
+          TASK_FAMILY="$SERVICE"
+          LOG_GROUP="/ecs/${TASK_FAMILY}"
+          PORT_NUM=$(echo "$CONTAINER_PORT" | grep -E '^[0-9]+$' || echo "80")
+
+          # Montar containerDefinitions (porta e nome para LB quando API)
+          CONTAINER_DEF=$(jq -n \
+            --arg name "$CONTAINER_NAME" \
+            --arg image "$FULL_IMAGE" \
+            --argjson port "$PORT_NUM" \
+            --arg lg "$LOG_GROUP" \
+            --arg region "$AWS_REGION" \
+            '{
+              name: $name,
+              image: $image,
+              portMappings: [{ containerPort: $port, protocol: "tcp" }],
+              logConfiguration: {
+                logDriver: "awslogs",
+                options: {
+                  "awslogs-group": $lg,
+                  "awslogs-region": $region,
+                  "awslogs-stream-prefix": "ecs"
+                }
+              },
+              essential: true
+            }')
+
+          # Montar task definition completa (Fargate)
+          TASK_DEF_JSON=$(jq -n \
+            --arg family "$TASK_FAMILY" \
+            --arg execRole "$TASK_EXEC_ROLE" \
+            --arg taskRole "$TASK_ROLE" \
+            --arg cpu "${{ inputs.task_cpu || '256' }}" \
+            --arg memory "${{ inputs.task_memory || '512' }}" \
+            --argjson container "$CONTAINER_DEF" \
+            '{
+              family: $family,
+              networkMode: "awsvpc",
+              requiresCompatibilities: ["FARGATE"],
+              cpu: $cpu,
+              memory: $memory,
+              executionRoleArn: $execRole,
+              containerDefinitions: [$container]
+            } | if $taskRole != "" then . + {taskRoleArn: $taskRole} else . end')
+
+          echo "📝 Registrando nova revisão da task definition..."
+          NEW_TASK_ARN=$(echo "$TASK_DEF_JSON" | aws ecs register-task-definition --cli-input-json file:///dev/stdin --query 'taskDefinition.taskDefinitionArn' --output text)
+          echo "task_definition_arn=${NEW_TASK_ARN}" >> $GITHUB_OUTPUT
+          echo "✅ Task definition: $NEW_TASK_ARN"
+
+          # Verificar se o service já existe no cluster
+          EXISTING=$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" --query 'services[?status==`ACTIVE`]' --output json)
+          SERVICE_EXISTS=$(echo "$EXISTING" | jq 'length > 0')
+
+          if [ "$SERVICE_EXISTS" = "true" ]; then
+            echo "🔄 Service já existe: atualizando com nova task definition..."
+            aws ecs update-service \
+              --cluster "$CLUSTER" \
+              --service "$SERVICE" \
+              --task-definition "$NEW_TASK_ARN" \
+              --force-new-deployment \
+              --query 'service.serviceArn' \
+              --output text
+          else
+            echo "🆕 Service não existe: criando service e registrando no cluster..."
+            if [ -z "$SUBNET_IDS" ] || [ -z "$SECURITY_GROUPS" ]; then
+              echo "❌ Para criar o service são obrigatórios: subnet_ids e security_group_ids"
+              exit 1
+            fi
+            SUBNETS=$(echo "$SUBNET_IDS" | tr ',' '\n' | jq -R . | jq -s .)
+            SGS=$(echo "$SECURITY_GROUPS" | tr ',' '\n' | jq -R . | jq -s .)
+            NETWORK_CONFIG=$(jq -n \
+              --argjson subnets "$SUBNETS" \
+              --argjson sgs "$SGS" \
+              --arg assign "$ASSIGN_PUBLIC_IP" \
+              '{ awsvpcConfiguration: { subnets: $subnets, securityGroups: $sgs, assignPublicIp: $assign } }')
+
+            if [ "$SERVICE_TYPE" = "api" ] && [ -n "$TARGET_GROUP_ARN" ]; then
+              echo "📌 API com Load Balancer: target group $TARGET_GROUP_ARN"
+              LB_JSON=$(jq -n \
+                --arg tg "$TARGET_GROUP_ARN" \
+                --arg cn "$CONTAINER_NAME" \
+                --argjson cp "$PORT_NUM" \
+                '[{ targetGroupArn: $tg, containerName: $cn, containerPort: $cp }]')
+              aws ecs create-service \
+                --cluster "$CLUSTER" \
+                --service-name "$SERVICE" \
+                --task-definition "$NEW_TASK_ARN" \
+                --desired-count "$(echo "$DESIRED_COUNT" | sed 's/^0*//' || echo 1)" \
+                --network-configuration "$NETWORK_CONFIG" \
+                --load-balancers "$LB_JSON" \
+                --launch-type FARGATE \
+                --query 'service.serviceArn' \
+                --output text
+            else
+              echo "📌 Worker (sem Load Balancer)"
+              aws ecs create-service \
+                --cluster "$CLUSTER" \
+                --service-name "$SERVICE" \
+                --task-definition "$NEW_TASK_ARN" \
+                --desired-count "$(echo "$DESIRED_COUNT" | sed 's/^0*//' || echo 1)" \
+                --network-configuration "$NETWORK_CONFIG" \
+                --launch-type FARGATE \
+                --query 'service.serviceArn' \
+                --output text
+            fi
+          fi
+
+          echo "service_arn=$(aws ecs describe-services --cluster $CLUSTER --services $SERVICE --query 'services[0].serviceArn' --output text)" >> $GITHUB_OUTPUT
+          echo "⏳ Aguardando deployment estabilizar..."
+          aws ecs wait services-stable --cluster "$CLUSTER" --services "$SERVICE"
+          echo "✅ Deployment concluído"
+
+      - name: Gerar deploy metadata (histórico e rollback)
+        id: deploy-meta
+        if: success()
+        run: |
+          mkdir -p .deploys
+          cat << EOF > .deploys/deploy.json
+          {
+            "environment": "${{ inputs.environment }}",
+            "deployment_name": "${{ inputs.deployment_name }}",
+            "image_digest": "${{ steps.ecr-push.outputs.image_digest }}",
+            "image_tag": "${{ steps.ecr-push.outputs.image_tag }}",
+            "task_definition_arn": "${{ steps.ecs-deploy.outputs.task_definition_arn }}",
+            "service_arn": "${{ steps.ecs-deploy.outputs.service_arn }}",
+            "commit_sha": "${{ github.sha }}",
+            "branch": "${{ github.ref_name }}",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "run_id": "${{ github.run_id }}",
+            "run_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          }
+          EOF
+          echo "path=.deploys" >> $GITHUB_OUTPUT
+
+      - name: Upload deploy metadata
+        uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: deploy-${{ inputs.environment }}-${{ inputs.deployment_name }}-${{ github.run_id }}
+          path: .deploys
+
+      - name: Health check (opcional)
+        if: inputs.enable_health_check == true && inputs.health_check_url != ''
+        run: |
+          URL="${{ inputs.health_check_url }}"
+          MAX_ATTEMPTS=12
+          INTERVAL=10
+          for i in $(seq 1 $MAX_ATTEMPTS); do
+            if curl -sf "$URL" > /dev/null; then
+              echo "✅ Health check OK em $URL"
+              exit 0
+            fi
+            echo "Tentativa $i/$MAX_ATTEMPTS falhou; aguardando ${INTERVAL}s..."
+            sleep $INTERVAL
+          done
+          echo "❌ Health check falhou após $MAX_ATTEMPTS tentativas"
+          exit 1

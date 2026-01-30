@@ -1,0 +1,28 @@
+# Dockerfile genérico para Workers .NET (repo de templates CI/CD)
+# Usado quando use_default_dockerfile=true no pipeline.
+# Build context: raiz do repositório da aplicação.
+# ARG PROJECT_NAME: nome do projeto .csproj (ex.: Inbound.Nfe.Wrk.ProcessaXml)
+
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+WORKDIR /src
+
+COPY src/*.sln ./
+COPY src/*/*.csproj ./
+RUN for f in *.csproj; do mkdir -p "${f%.*}/" && mv "$f" "${f%.*}/"; done
+RUN dotnet restore
+
+COPY src/. .
+ARG PROJECT_NAME
+RUN dotnet publish "${PROJECT_NAME}/${PROJECT_NAME}.csproj" -c Release -o /app/publish --no-restore
+
+FROM mcr.microsoft.com/dotnet/runtime:8.0
+WORKDIR /app
+
+RUN adduser --disabled-password --gecos '' appuser && chown -R appuser /app
+USER appuser
+
+COPY --from=build /app/publish .
+
+ARG PROJECT_NAME
+ENV PROJECT_DLL=${PROJECT_NAME}.dll
+ENTRYPOINT ["/bin/sh", "-c", "exec dotnet \"$PROJECT_DLL\""]
