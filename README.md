@@ -1,215 +1,527 @@
-# CI/CD para AWS ECS com GitHub Actions
+# 🚀 CI/CD para AWS ECS com GitHub Actions
 
-Arquitetura escalável e reutilizável para deploy de aplicações .NET (APIs e Workers) no Amazon ECS.
+Pipeline reutilizável e completo para deploy de aplicações **.NET** (APIs e Workers) no **Amazon ECS Fargate**.
 
-**Características:**
-- Template centralizado: um workflow reutilizável (Build → Test → Docker → ECR → ECS)
-- **ecs_service**: nome do service ECS e da task definition family; **ecr_repo**: nome do repositório ECR; **ecr_registry**: URL do ECR
-- **Dockerfile padrão** no repo de templates (`build/Dockerfile.api`, `build/Dockerfile.worker`) ou Dockerfile do repo da aplicação
-- Ambientes 1:1 com branch: dev, qa, sbx, prd (secrets e aprovações por ambiente)
-- Rollback manual com workflow dedicado e playbook
-- Zero secrets em plain text; uso de GitHub Environments
+[![GitHub Actions](https://img.shields.io/badge/GitHub%20Actions-Reusable%20Workflow-2088FF?logo=github-actions&logoColor=white)](https://docs.github.com/en/actions/using-workflows/reusing-workflows)
+[![AWS ECS](https://img.shields.io/badge/AWS-ECS%20Fargate-FF9900?logo=amazon-aws&logoColor=white)](https://aws.amazon.com/ecs/)
+[![.NET](https://img.shields.io/badge/.NET-8.0-512BD4?logo=dotnet&logoColor=white)](https://dotnet.microsoft.com/)
 
 ---
 
-## Estrutura
+## 📋 Índice
+
+- [Visão Geral](#-visão-geral)
+- [Como Funciona](#-como-funciona)
+- [Arquitetura e Fluxograma](#-arquitetura-e-fluxograma)
+- [Estrutura do Projeto](#-estrutura-do-projeto)
+- [Guia de Configuração](#-guia-de-configuração)
+- [Referência de Inputs](#-referência-de-inputs)
+- [Exemplos de Uso](#-exemplos-de-uso)
+- [Rollback](#-rollback)
+- [Troubleshooting](#-troubleshooting)
+
+---
+
+## 🎯 Visão Geral
+
+### O que é?
+
+Um **workflow reutilizável** do GitHub Actions que automatiza todo o ciclo de vida de deploy de aplicações .NET no AWS ECS:
 
 ```
-github-ecs/
-├── .github/
-│   ├── workflows/
-│   │   ├── reusable-ecs-pipeline.yml   # Template principal (build → test → docker → ecr → ecs)
-│   │   └── rollback.yml                # Rollback manual reutilizável
-│   ├── ENVIRONMENTS.md                  # Configuração de environments e secrets
-│   ├── VERSIONING.md                   # Estratégia de tags e histórico
-│   ├── ROLLBACK-PLAYBOOK.md            # Playbook de rollback
-│   └── ECS-PIPELINE-COVERAGE.md        # Cobertura: task definition e service vs pipeline (gaps)
-├── build/
-│   ├── Dockerfile.api                  # Dockerfile genérico para APIs (uso com use_default_dockerfile=true)
-│   └── Dockerfile.worker               # Dockerfile genérico para Workers
-├── example/                             # Uma pasta de exemplo
-│   ├── README.md                       # Como usar os exemplos
-│   ├── .github/workflows/
-│   │   └── rollback.yml.example        # Exemplo de rollback manual
-│   ├── inbound-nfe-api-envioxml/       # Projeto .NET API de exemplo
-│   │   ├── src/
-│   │   └── .github/workflows/deploy.yml
-│   └── inbound-nfe-wrk-processaxml/    # Projeto .NET Worker de exemplo
-│       ├── src/
-│       └── .github/workflows/deploy.yml
-└── README.md
+Build → Test → Docker → ECR → ECS (Task Definition + Service)
+```
+
+### Características Principais
+
+| Recurso | Descrição |
+|---------|-----------|
+| 🔄 **Reutilizável** | Um único workflow para todas as aplicações |
+| 🏗️ **Greenfield & Brownfield** | Cria serviços do zero ou atualiza existentes |
+| 🔐 **Zero Secrets em Plain Text** | Uso exclusivo de GitHub Environments |
+| 🌍 **Multi-ambiente** | dev, qa, sbx, prd com isolamento de credenciais |
+| ⚡ **FARGATE_SPOT** | Suporte a capacity providers para economia |
+| 🔁 **Rollback** | Workflow dedicado com aprovação em produção |
+| 🎯 **Idempotente** | Target Groups e Listeners criados apenas se não existirem |
+
+### Cenários Suportados
+
+| Cenário | Descrição | Exemplo |
+|---------|-----------|---------|
+| **Greenfield (API)** | Service + Task Definition + Target Group + Listener do zero | Nova API REST |
+| **Greenfield (Worker)** | Service + Task Definition do zero | Novo processador de filas |
+| **Brownfield** | Atualiza apenas a imagem (task definition existente preservada) | Deploy de correção |
+
+---
+
+## ⚙️ Como Funciona
+
+### Conceitos Principais
+
+#### Nomenclatura
+
+| Parâmetro | Descrição | Exemplo |
+|-----------|-----------|---------|
+| `ecs_service` | Nome do Service ECS **e** Task Definition Family | `inbound-nfe-api-envioxml` |
+| `ecr_repo` | Nome do repositório no ECR | `inbound` |
+| `ecr_registry` | URL do registry ECR | `123456789.dkr.ecr.us-east-1.amazonaws.com` |
+
+**Imagem final:** `{ecr_registry}/{ecr_repo}:{tag}` → `123456789.dkr.ecr.us-east-1.amazonaws.com/inbound:abc1234`
+
+#### Dockerfile
+
+| Modo | Quando Usar | Configuração |
+|------|-------------|--------------|
+| **Padrão** | Projetos .NET padrão | `use_default_dockerfile: true` + `templates_repo` + `project_name` |
+| **Customizado** | Dockerfile próprio | `use_default_dockerfile: false` + `dockerfile_path` |
+
+#### Mapeamento Branch → Ambiente
+
+| Branch | Environment | Aprovação | Uso |
+|--------|-------------|-----------|-----|
+| `dev` | `dev` | ❌ Não | Desenvolvimento |
+| `qa` | `qa` | ❌ Não | Testes |
+| `sbx` | `sbx` | ✅ Sim | Homologação |
+| `prd` | `prd` | ✅ Sim | Produção |
+
+### Fluxo de Execução Detalhado
+
+#### 1️⃣ Build & Test
+```
+dotnet restore → dotnet test → docker build
+```
+- Cache de pacotes NuGet para performance
+- Falha nos testes interrompe o pipeline
+
+#### 2️⃣ Push ECR
+```
+docker tag → docker push (3 tags)
+```
+| Tag | Exemplo | Finalidade |
+|-----|---------|------------|
+| SHA | `abc1234` | Rollback preciso |
+| Branch | `prd` | Referência por ambiente |
+| Timestamp | `20250131-143022` | Auditoria |
+
+#### 3️⃣ Deploy ECS
+
+**Service Existe (Brownfield):**
+1. Obtém task definition atual do service
+2. Atualiza apenas a imagem (preserva secrets, env vars, etc.)
+3. Registra nova revisão
+4. `update-service --force-new-deployment`
+
+**Service Não Existe (Greenfield):**
+1. Cria task definition completa a partir dos inputs
+2. (API) Cria/obtém Target Group e Listener Rule
+3. `create-service` com rede, LB, capacity provider
+4. Aguarda estabilização
+
+#### 4️⃣ Pós-Deploy
+- Gera artifact `deploy.json` com metadados
+- (Opcional) Health check HTTP
+
+---
+
+## 🏗️ Arquitetura e Fluxograma
+
+### Diagrama de Componentes
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                            GITHUB ACTIONS                                    │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │                    reusable-ecs-pipeline.yml                         │    │
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌────────┐│    │
+│  │  │ Validate │→ │  Build   │→ │  Test    │→ │  Docker  │→ │  Push  ││    │
+│  │  └──────────┘  └──────────┘  └──────────┘  └──────────┘  └────────┘│    │
+│  │       ↓                                                       ↓      │    │
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌────────┐│    │
+│  │  │ Task Def │→ │ Target   │→ │ Listener │→ │   ECS    │→ │ Health ││    │
+│  │  │ Register │  │  Group   │  │   Rule   │  │  Deploy  │  │ Check  ││    │
+│  │  └──────────┘  └──────────┘  └──────────┘  └──────────┘  └────────┘│    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                                  AWS                                         │
+│  ┌─────────────┐    ┌─────────────┐    ┌─────────────────────────────────┐  │
+│  │     ECR     │    │     ALB     │    │            ECS                   │  │
+│  │  ┌───────┐  │    │  ┌───────┐  │    │  ┌─────────┐    ┌────────────┐  │  │
+│  │  │ Image │  │    │  │Listener│ │    │  │ Cluster │    │  Service   │  │  │
+│  │  │ :sha  │  │    │  │ Rules │  │    │  │         │    │  ┌──────┐  │  │  │
+│  │  │ :env  │  │    │  └───┬───┘  │    │  │         │    │  │ Task │  │  │  │
+│  │  │ :time │  │    │      │      │    │  │         │    │  │ Def  │  │  │  │
+│  │  └───────┘  │    │  ┌───▼───┐  │    │  │         │    │  └──────┘  │  │  │
+│  └─────────────┘    │  │Target │  │    │  │         │    │      │     │  │  │
+│                     │  │ Group │──┼────┼──┼─────────┼────┼──────▼─────│  │  │
+│                     │  └───────┘  │    │  │         │    │  ┌──────┐  │  │  │
+│                     └─────────────┘    │  │         │    │  │ Task │  │  │  │
+│                                        │  └─────────┘    │  └──────┘  │  │  │
+│                                        └─────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Fluxograma do Pipeline
+
+```mermaid
+flowchart TB
+    subgraph TRIGGER["🚀 Trigger"]
+        A[Push em branch<br/>dev/qa/sbx/prd]
+    end
+
+    subgraph VALIDATE["✅ Validação"]
+        B[Validar ambiente<br/>e parâmetros]
+    end
+
+    subgraph BUILD["🔨 Build"]
+        C[Checkout código]
+        D[Setup .NET SDK]
+        E[Restore + Cache NuGet]
+        F[dotnet test]
+        G{Testes OK?}
+    end
+
+    subgraph DOCKER["🐳 Docker"]
+        H[Checkout templates]
+        I[Build imagem]
+        J[Login ECR]
+        K[Push 3 tags]
+    end
+
+    subgraph ECS["☁️ ECS Deploy"]
+        L{Service existe?}
+        M[Obter task def atual<br/>Atualizar imagem]
+        N[Criar task def<br/>do zero]
+        O{É API?}
+        P[Criar/Obter TG]
+        Q[Criar Listener Rule]
+        R[update-service]
+        S[create-service]
+        T[Aguardar estabilização]
+    end
+
+    subgraph POST["📋 Pós-Deploy"]
+        U[Gerar metadata]
+        V[Upload artifact]
+        W{Health check?}
+        X[Verificar endpoint]
+    end
+
+    A --> B
+    B --> C
+    C --> D
+    D --> E
+    E --> F
+    F --> G
+    G -->|❌ Falha| Z[Pipeline falha]
+    G -->|✅ OK| H
+    H --> I
+    I --> J
+    J --> K
+    K --> L
+    L -->|Sim| M
+    L -->|Não| N
+    M --> R
+    N --> O
+    O -->|Sim| P
+    O -->|Não| S
+    P --> Q
+    Q --> S
+    R --> T
+    S --> T
+    T --> U
+    U --> V
+    V --> W
+    W -->|Sim| X
+    W -->|Não| Y[✅ Deploy concluído]
+    X --> Y
+```
+
+### Fluxograma do Rollback
+
+```mermaid
+flowchart TD
+    A[Problema detectado<br/>pós-deploy] --> B{Health check<br/>automático falhou?}
+    B -->|Sim| C[Rollback automático<br/>para versão anterior]
+    B -->|Não| D[Decisão humana]
+    D --> E[Executar workflow<br/>Rollback ECS]
+    E --> F{Ambiente é prd?}
+    F -->|Sim| G[Aprovação manual<br/>Required reviewers]
+    F -->|Não| H[Execução direta]
+    G --> I[Rollback executado]
+    H --> I
+    C --> J[Notificação]
+    I --> K[Smoke test]
+    K --> L{Estável?}
+    L -->|Sim| M[✅ Fim]
+    L -->|Não| N[⚠️ Escalar para equipe]
 ```
 
 ---
 
-## ecs_service, ecr_repo e ecr_registry
+## 📁 Estrutura do Projeto
 
-- **ecs_service**: nome do **service ECS** e da **task definition family** (ex.: `inbound-nfe-api-envioxml`).
-- **ecr_repo**: nome do **repositório ECR** onde a imagem será enviada (ex.: `inbound` ou o mesmo do service). O repositório ECR deve existir com esse nome (ou ser criado antes do primeiro push).
-- **ecr_registry**: URL do registry ECR (ex.: `123456789012.dkr.ecr.us-east-1.amazonaws.com`). O caller passa via variável do environment, ex.: `ecr_registry: ${{ vars.ECR_REGISTRY }}`.
-
-A imagem é enviada para `{ecr_registry}/{ecr_repo}:{tag}`.
-
----
-
-## Dockerfile padrão vs do repositório
-
-- **Padrão** (`use_default_dockerfile: true`): o pipeline faz checkout do repo de templates e usa `build/Dockerfile.api` ou `build/Dockerfile.worker`. Obrigatório informar `project_name` (nome do .csproj) e `templates_repo`.
-- **Do repositório** (`use_default_dockerfile: false`): usa o Dockerfile do repo da aplicação (`dockerfile_path` ou `Dockerfile.<service_type>` ou `Dockerfile`).
-
----
-
-## Mapeamento branch → ambiente
-
-| Branch | GitHub Environment | Aprovação |
-|--------|--------------------|-----------|
-| `dev` | `dev` | Não |
-| `qa` | `qa` | Não |
-| `sbx` | `sbx` | Sim (Required reviewers) |
-| `prd` | `prd` | Sim (Required reviewers) |
-
-Cada branch usa apenas os secrets do environment correspondente.
+```
+infra-ci-cd/
+├── 📄 README.md                          # Esta documentação
+├── 📁 .github/
+│   ├── 📁 workflows/
+│   │   ├── 📄 reusable-ecs-pipeline.yml  # 🎯 Pipeline principal
+│   │   └── 📄 rollback.yml               # 🔄 Rollback manual
+│   ├── 📄 ENVIRONMENTS.md                # 📝 Guia de environments
+│   ├── 📄 VERSIONING.md                  # 📝 Estratégia de tags
+│   └── 📄 ROLLBACK-PLAYBOOK.md           # 📝 Playbook de rollback
+├── 📁 build/
+│   ├── 📄 README.md                      # 📝 Doc dos Dockerfiles
+│   ├── 🐳 Dockerfile.api                 # Dockerfile para APIs
+│   └── 🐳 Dockerfile.worker              # Dockerfile para Workers
+```
 
 ---
 
-## Fluxo do pipeline
+## 🔧 Guia de Configuração
 
-1. **Build**: Restore .NET (com cache NuGet).
-2. **Test**: `dotnet test`; falha interrompe o pipeline.
-3. **Docker Build**: Imagem com Dockerfile padrão (build/) ou do repo da app; build-arg `PROJECT_NAME` quando uso padrão.
-4. **Push ECR**: Tags `sha`, `branch` e timestamp; push para `{ecr_registry}/{ecr_repo}:{tag}`.
-5. **Deploy ECS**:
-   - **Service já existe**: reutiliza a task definition atual, troca apenas a **imagem** (e o **environment** do container, se `container_environment` for informado); registra nova revisão e faz `update-service --force-new-deployment`.
-   - **Service não existe**: monta a task definition a partir dos inputs, registra, cria o service (rede, LB para API, etc.) e faz `wait services-stable`.
-6. **Deploy metadata**: Artifact com digest, tag, timestamp (histórico).
-7. **Health check** (opcional): Polling HTTP na URL configurada.
+### Passo 1: Configurar GitHub Environments
 
----
+Na organização ou repositório da aplicação, vá em **Settings > Environments** e crie:
 
-## Guia de implementação
+| Environment | Configuração |
+|-------------|--------------|
+| `dev` | Deployment branches: `dev` |
+| `qa` | Deployment branches: `qa` |
+| `sbx` | Deployment branches: `sbx` + **Required reviewers** |
+| `prd` | Deployment branches: `prd` + **Required reviewers** |
 
-### 1. Configurar GitHub Environments (org ou repo da app)
+### Passo 2: Configurar Variables (por ambiente)
 
-Crie os environments `dev`, `qa`, `sbx`, `prd` e, em cada um:
+| Variable | Obrigatório | Descrição |
+|----------|-------------|-----------|
+| `ECR_REGISTRY` | ✅ | URL do ECR (ex: `123456789.dkr.ecr.us-east-1.amazonaws.com`) |
+| `LOAD_BALANCER_NAME` | API | Nome do ALB existente |
+| `ECS_CLUSTER` | ✅ | Nome do cluster ECS |
+| `SUBNET_IDS` | 1º deploy | IDs das subnets (vírgula) |
+| `SECURITY_GROUP_IDS` | 1º deploy | IDs dos security groups (vírgula) |
+| `ECS_TASK_EXECUTION_ROLE_ARN` | ✅ | ARN da role de execução |
+| `ECS_TASK_ROLE_ARN` | ✅ | ARN da role de execução |
 
-- **Environment variables**: `ECR_REGISTRY` (URL do registry ECR, ex.: `123456789.dkr.ecr.us-east-1.amazonaws.com`).
-- **Environment secrets**: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `ECS_CLUSTER`, `ECS_TASK_EXECUTION_ROLE_ARN`.
+### Passo 3: Configurar Secrets (por ambiente)
 
-Detalhes em [.github/ENVIRONMENTS.md](.github/ENVIRONMENTS.md).
+| Secret | Obrigatório | Descrição |
+|--------|-------------|-----------|
+| `AWS_ACCESS_KEY_ID` | ✅ | Access Key AWS |
+| `AWS_SECRET_ACCESS_KEY` | ✅ | Secret Key AWS |
 
-### 2. Workflow no repositório da aplicação
+### Passo 4: Criar Workflow na Aplicação
 
-Use como base os exemplos em [example/](example/):
+Crie `.github/workflows/deploy.yml`:
 
-- **API (greenfield)** — [example/inbound-nfe-api-envioxml/.github/workflows/deploy.yml](example/inbound-nfe-api-envioxml/.github/workflows/deploy.yml): preenche **todos** os inputs como se o service e a task definition não existissem (criação do zero).
-- **Worker (brownfield)** — [example/inbound-nfe-wrk-processaxml/.github/workflows/deploy.yml](example/inbound-nfe-wrk-processaxml/.github/workflows/deploy.yml): preenche o **mínimo** (cluster e service via secrets); service já existe e o pipeline **reutiliza a task definition atual**, trocando só a **imagem** (e opcionalmente o **environment** se informar `container_environment`). Role de execução não é obrigatória nesse cenário.
+```yaml
+name: Deploy
 
-Substitua `SEU_ORG/infra-ci-cd` pelo repositório que contém os workflows.
+on:
+  push:
+    branches: [dev, qa, sbx, prd]
 
-### 3. Pré-requisitos na AWS
+jobs:
+  deploy:
+    uses: SEU_ORG/infra-ci-cd/.github/workflows/reusable-ecs-pipeline.yml@main
+    with:
+      ecs_service: minha-api
+      service_type: api
+      ecr_repo: minha-api
+      ecr_registry: ${{ vars.ECR_REGISTRY }}
+      environment: ${{ github.ref_name }}
+      # ... outros inputs
+    secrets: inherit
+```
 
-- **ECR**: Repositório com o nome **ecr_repo** (ex.: `inbound`). A imagem é tagueada com sha, branch e timestamp.
-- **Task Definition** e **ECS Service**: nome = **ecs_service**; imagem em `{ecr_registry}/{ecr_repo}:{tag}`.
-
-### 4. API com Load Balancer (idempotente)
-
-Para **API** (`service_type: api`), o pipeline usa o modo **criar/obter target group e listener** no ALB (como no console AWS), com **idempotência**:
-
-- **Target group**: se já existir um TG com o nome informado na mesma VPC, o pipeline reutiliza; caso contrário, cria.
-- **Listener**: se já existir um listener na porta informada no ALB apontando para o mesmo TG, nada é criado; se a porta estiver livre, o listener é criado.
-
-Obrigatório para API no primeiro deploy: `create_target_group_and_listener: true`, `target_group_name`, e `load_balancer_name` (ou `load_balancer_arn`). Opcionais: `listener_port`, `listener_protocol`, `target_group_port`, `target_group_health_check_path`, `target_group_deregistration_delay_seconds`.
-
-### 5. Testar
-
-Push nas branches `dev`, `qa`, `sbx` ou `prd`; sbx e prd exigirão aprovação se configurada.
-
----
-
-## Rollback
-
-- **Manual**: Workflow **Rollback ECS** (Actions > Run workflow). Exemplo: [example/.github/workflows/rollback.yml.example](example/.github/workflows/rollback.yml.example). Em `prd`, o environment exige aprovação.
-- **Histórico**: Artifact `deploy.json` em cada deploy; use a tag desejada no rollback.
-- **Playbook**: [.github/ROLLBACK-PLAYBOOK.md](.github/ROLLBACK-PLAYBOOK.md).
-- **Versionamento**: [.github/VERSIONING.md](.github/VERSIONING.md).
+📚 **Exemplos completos:** [example/](example/)
 
 ---
 
-## Variáveis do template (reusable-ecs-pipeline)
+## 📖 Referência de Inputs
 
-### Inputs obrigatórios
+### Inputs Obrigatórios
 
-| Input | Descrição |
-|-------|-----------|
-| `ecs_service` | Nome do service ECS e da task definition family (ex.: `inbound-nfe-api-envioxml`) |
-| `service_type` | `api` ou `worker` |
-| `ecr_repo` | Nome do repositório ECR (ex.: `inbound` ou o mesmo do service) |
-| `ecr_registry` | URL do registry ECR (ex.: `vars.ECR_REGISTRY`) |
-| `environment` | `dev`, `qa`, `sbx` ou `prd` (caller passa `github.ref_name`) |
+| Input | Tipo | Descrição |
+|-------|------|-----------|
+| `ecs_service` | string | Nome do Service ECS e Task Definition Family |
+| `service_type` | string | `api` ou `worker` |
+| `ecr_repo` | string | Nome do repositório ECR |
+| `environment` | string | `dev`, `qa`, `sbx` ou `prd` |
 
-### Inputs opcionais
+### Build & Docker
 
-| Input | Padrão |
-|-------|--------|
-| `use_default_dockerfile` | `true` (usa build/Dockerfile.* do repo de templates) |
-| `templates_repo`, `templates_ref` | Repo e branch dos templates (quando use_default_dockerfile=true) |
-| `project_name` | Nome do .csproj (obrigatório quando use_default_dockerfile=true) |
-| `dockerfile_path` | Caminho do Dockerfile no repo da app (quando use_default_dockerfile=false) |
-| `dotnet_version`, `working_directory`, `aws_region` | 8.0, src, us-east-1 |
-| `ecs_cluster` | Nome do cluster (vazio = secret `ECS_CLUSTER`) |
-| **Task definition (cenário real)** | |
-| `container_environment` | JSON array `[{"name":"X","value":"Y"}]` de variáveis de ambiente no container |
-| `container_secrets` | JSON array `[{"name":"X","valueFrom":"arn:aws:secretsmanager:..."}]` (Secrets Manager) |
-| `runtime_cpu_architecture`, `runtime_os_family` | X86_64, ARM64 / LINUX, WINDOWS_SERVER_2019_CORE |
-| `awslogs_mode`, `awslogs_create_group`, `awslogs_max_buffer_size` | non-blocking, true, 25m (opções de log) |
-| `port_mapping_app_protocol` | appProtocol do portMapping (ex.: http) |
-| **Service (cenário real)** | |
-| `enable_zone_rebalancing` | Rebalanceamento de zonas de disponibilidade (true/false) |
-| `health_check_grace_period_seconds` | Período de carência do health check (segundos) |
-| `deployment_circuit_breaker_enable`, `deployment_circuit_breaker_rollback` | Disjuntor de implantação e rollback automático |
-| `capacity_provider_strategy` | Ex.: `FARGATE:0:1,FARGATE_SPOT:0:4` (provider:base:weight); vazio = launch-type FARGATE |
-| `platform_version` | Versão da plataforma Fargate (ex.: 1.4.0) |
-| `enable_execute_command` | ECS Exec (comandos interativos no container) |
-| `deployment_minimum_healthy_percent`, `deployment_maximum_percent` | Ex.: 100, 200 (configuração de deploy) |
-| `enable_health_check`, `health_check_url` | Health check pós-deploy (opcional) |
-| **API: Load Balancer (idempotente)** | |
-| `create_target_group_and_listener` | `true` para API: obter ou criar TG e listener no ALB (só cria se não existir) |
-| `load_balancer_name` ou `load_balancer_arn` | ALB existente (nome ou ARN) |
-| `listener_port`, `listener_protocol` | Porta e protocolo do listener (ex.: 80, HTTP) |
-| `target_group_name`, `target_group_port` | Nome e porta do target group (ex.: tg-api-dev, 80) |
-| `target_group_health_check_path`, `target_group_deregistration_delay_seconds` | Health check do TG e demora no cancelamento do registro |
+| Input | Padrão | Descrição |
+|-------|--------|-----------|
+| `dotnet_version` | `8.0` | Versão do .NET SDK |
+| `working_directory` | `src` | Diretório do código fonte |
+| `use_default_dockerfile` | `true` | Usar Dockerfile do repo de templates |
+| `templates_repo` | - | Repo dos templates (quando use_default=true) |
+| `project_name` | - | Nome do .csproj (quando use_default=true) |
+| `dockerfile_path` | - | Caminho do Dockerfile (quando use_default=false) |
 
-### Secrets (por environment)
+### ECS - Task Definition
 
-| Secret | Descrição |
-|--------|-----------|
-| `AWS_ACCESS_KEY_ID` | Access Key AWS |
-| `AWS_SECRET_ACCESS_KEY` | Secret Key AWS |
-| `ECS_CLUSTER` | Nome do cluster ECS |
-| `ECS_SERVICE` | Nome do service ECS |
-| `ECS_TASK_EXECUTION_ROLE_ARN` | ARN da role de execução da task (obrigatório para registrar task definition) |
+| Input | Padrão | Descrição |
+|-------|--------|-----------|
+| `task_cpu` | `256` | CPU (256, 512, 1024, 2048, 4096) |
+| `task_memory` | `512` | Memória em MB |
+| `container_name` | `app` | Nome do container |
+| `container_port` | `80` | Porta do container |
+| `container_environment` | - | JSON array de env vars |
+| `container_secrets` | - | JSON array de secrets (Secrets Manager) |
+| `runtime_cpu_architecture` | - | `X86_64` ou `ARM64` |
+| `runtime_os_family` | - | `LINUX` ou `WINDOWS_SERVER_2019_CORE` |
 
----
+### ECS - Service
 
-## Cobertura (task definition e service ECS)
+| Input | Padrão | Descrição |
+|-------|--------|-----------|
+| `desired_count` | `1` | Número de tasks |
+| `subnet_ids` | - | IDs das subnets (vírgula) |
+| `security_group_ids` | - | IDs dos SGs (vírgula) |
+| `capacity_provider_strategy` | - | Ex: `FARGATE_SPOT:0:4` |
+| `platform_version` | - | Ex: `1.4.0` |
+| `enable_execute_command` | `false` | Habilitar ECS Exec |
+| `enable_zone_rebalancing` | `false` | Rebalanceamento de AZs |
+| `deployment_circuit_breaker_enable` | `false` | Circuit breaker |
+| `deployment_circuit_breaker_rollback` | `false` | Auto-rollback |
 
-O pipeline **suporta o cenário real ECS**: task definition com **environment**, **secrets** (Secrets Manager), **runtimePlatform**, opções de log (mode, awslogs-create-group, max-buffer-size), portMapping com **appProtocol**; service com **rebalanceamento de AZ**, **circuit breaker**, **capacity provider strategy** (ex.: FARGATE_SPOT), **platform version**, **ECS Exec**, **health check grace period** e **deployment configuration**. Detalhes e tabela de cobertura: [.github/ECS-PIPELINE-COVERAGE.md](.github/ECS-PIPELINE-COVERAGE.md).
+### API - Load Balancer
 
----
-
-## Troubleshooting
-
-- **Deployment não atualiza**: `aws ecs describe-services --cluster CLUSTER --services SERVICE`
-- **Logs**: `aws logs tail /ecs/APP_NAME --follow`
-- **Rollback manual**: Workflow Rollback ECS com tag/SHA da imagem desejada.
+| Input | Padrão | Descrição |
+|-------|--------|-----------|
+| `create_target_group_and_listener` | `false` | Criar/obter TG e Listener |
+| `load_balancer_name` | - | Nome do ALB |
+| `target_group_name` | - | Nome do Target Group |
+| `target_group_port` | `80` | Porta do TG |
+| `target_group_health_check_path` | `/` | Path do health check |
+| `listener_port` | `80` | Porta do Listener |
+| `listener_rule_host_header` | - | Host header para routing |
+| `listener_rule_path_pattern` | - | Path pattern para routing |
 
 ---
 
-## Boas práticas
+## 💡 Exemplos de Uso
 
-- Segregação de ambientes: um environment por branch; secrets por environment.
-- **ecs_service** = service e task definition; **ecr_repo** = repositório ECR; **ecr_registry** = URL do ECR.
-- Dockerfile padrão em `build/` para padronizar; opção de Dockerfile customizado por app.
-- GitHub Environments com Required reviewers em sbx e prd.
-- Tags ECR: sha, branch e timestamp.
-- Zero secrets em plain text nos YAMLs.
+### API Greenfield (Todos os Inputs)
+
+```yaml
+uses: SEU_ORG/infra-ci-cd/.github/workflows/reusable-ecs-pipeline.yml@main
+with:
+  ecs_service: minha-nova-api
+  service_type: api
+  ecr_repo: minha-nova-api
+  ecr_registry: ${{ vars.ECR_REGISTRY }}
+  environment: ${{ github.ref_name }}
+  
+  # Build
+  use_default_dockerfile: true
+  templates_repo: SEU_ORG/infra-ci-cd
+  project_name: MinhaApi
+  
+  # ECS
+  ecs_cluster: ${{ vars.ECS_CLUSTER }}
+  ecs_task_execution_role_arn: ${{ vars.ECS_TASK_EXECUTION_ROLE_ARN }}
+  subnet_ids: ${{ vars.ECS_SUBNET_IDS }}
+  security_group_ids: ${{ vars.ECS_SECURITY_GROUP_IDS }}
+  
+  # Load Balancer
+  create_target_group_and_listener: true
+  load_balancer_name: ${{ vars.ALB_NAME }}
+  target_group_name: tg-minha-api-${{ github.ref_name }}
+  listener_rule_host_header: 'api.${{ github.ref_name }}.example.com'
+  listener_rule_path_pattern: '/api/v1/*'
+  
+  # Fargate Spot
+  capacity_provider_strategy: FARGATE_SPOT:0:4
+secrets: inherit
+```
+
+### Worker Brownfield (Mínimo)
+
+```yaml
+uses: SEU_ORG/infra-ci-cd/.github/workflows/reusable-ecs-pipeline.yml@main
+with:
+  ecs_service: meu-worker-existente
+  service_type: worker
+  ecr_repo: meu-worker
+  ecr_registry: ${{ vars.ECR_REGISTRY }}
+  environment: ${{ github.ref_name }}
+  use_default_dockerfile: true
+  templates_repo: SEU_ORG/infra-ci-cd
+  project_name: MeuWorker
+secrets: inherit
+```
+
+---
+
+## 🔄 Rollback
+
+### Como Executar
+
+1. Vá em **Actions** no repositório
+2. Selecione **Rollback ECS**
+3. Clique em **Run workflow**
+4. Preencha:
+   - `environment`: dev, qa, sbx ou prd
+   - `ecs_service`: nome do service
+   - `image_tag_or_sha`: tag para rollback (ex: `abc1234`)
+   - `reason`: motivo (auditoria)
+
+### Aprovação
+
+- **sbx/prd**: Requer aprovação de reviewer
+- **dev/qa**: Execução direta
+
+📚 **Playbook completo:** [ROLLBACK-PLAYBOOK.md](.github/ROLLBACK-PLAYBOOK.md)
+
+---
+
+## 🔍 Troubleshooting
+
+### Problemas Comuns
+
+| Problema | Causa | Solução |
+|----------|-------|---------|
+| `NETSDK1064` no build | `.dockerignore` faltando | Adicione `**/obj/` e `**/bin/` |
+| Service não atualiza | Task definition igual | Verifique se a imagem mudou |
+| Target Group já existe | Nome duplicado | Use nome único por ambiente |
+| Listener Rule conflita | Prioridade duplicada | Deixe vazio para auto-incrementar |
+
+### Comandos Úteis
+
+```bash
+# Ver status do service
+aws ecs describe-services --cluster CLUSTER --services SERVICE
+
+# Ver logs em tempo real
+aws logs tail /ecs/SERVICE --follow
+
+# Forçar novo deploy
+aws ecs update-service --cluster CLUSTER --service SERVICE --force-new-deployment
+
+# Listar imagens no ECR
+aws ecr describe-images --repository-name REPO --query 'imageDetails[*].[imageTags,imagePushedAt]'
+```
+
+---
+
+## 📚 Documentação Adicional
+
+| Documento | Descrição |
+|-----------|-----------|
+| [ENVIRONMENTS.md](.github/ENVIRONMENTS.md) | Configuração de environments e secrets |
+| [VERSIONING.md](.github/VERSIONING.md) | Estratégia de tags e histórico |
+| [ROLLBACK-PLAYBOOK.md](.github/ROLLBACK-PLAYBOOK.md) | Guia completo de rollback |
+| [build/README.md](build/README.md) | Documentação dos Dockerfiles |
+| [example/README.md](example/README.md) | Guia dos projetos de exemplo |
+
+---
+
+## 📄 Licença
+
+Este projeto é interno e proprietário.

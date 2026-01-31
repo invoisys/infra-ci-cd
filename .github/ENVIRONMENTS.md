@@ -1,118 +1,309 @@
-# Configuração de GitHub Environments e Secrets
+# 🔐 Configuração de GitHub Environments
 
-Cada ambiente (dev, qa, sbx, prd) deve ter seus próprios **Secrets** e **Variables** no GitHub. O pipeline usa o environment definido pela branch; **ecs_service** = service ECS e task definition; **ecr_repo** = nome do repositório ECR; **ecr_registry** vem da variável do environment.
+Guia completo para configurar GitHub Environments, Secrets e Variables para o pipeline de CI/CD.
 
-## Mapeamento branch → environment
+---
 
-| Branch (app) | GitHub Environment | Aprovação |
-|--------------|--------------------|-----------|
-| `dev` | `dev` | Não |
-| `qa` | `qa` | Não |
-| `sbx` | `sbx` | Sim (Required reviewers) |
-| `prd` | `prd` | Sim (Required reviewers) |
+## 📋 Índice
 
-## ecs_service, ecr_repo e ECR
+- [Visão Geral](#-visão-geral)
+- [Como Funciona](#-como-funciona)
+- [Passo a Passo](#-passo-a-passo)
+- [Referência de Configuração](#-referência-de-configuração)
+- [Fluxograma de Autenticação](#-fluxograma-de-autenticação)
+- [Troubleshooting](#-troubleshooting)
 
-O pipeline recebe **ecs_service** (nome do service ECS e da task definition family), **ecr_repo** (nome do repositório ECR) e **ecr_registry** (URL do ECR). A imagem é enviada para `{ecr_registry}/{ecr_repo}:{tag}`.
+---
 
-- O caller passa `ecs_service` (ex.: `inbound-nfe-api-envioxml`), `ecr_repo` (ex.: `inbound`) e `ecr_registry: ${{ vars.ECR_REGISTRY }}`.
-- O repositório ECR deve existir com o nome **ecr_repo** (ou ser criado antes do primeiro push).
+## 🎯 Visão Geral
 
-## Como configurar
+### O que são GitHub Environments?
 
-### 1. Criar os 4 environments
+GitHub Environments são **contextos isolados** para deploy que permitem:
+- 🔒 **Secrets segregados** por ambiente (dev, qa, sbx, prd)
+- ✅ **Aprovações manuais** antes de deploys críticos
+- 🔀 **Restrição de branches** para cada ambiente
+- 📊 **Auditoria** de quem aprovou e quando
 
-Em **Settings > Environments** do repositório da aplicação (ou da organização):
+### Por que usar?
 
-1. Crie os environments: `dev`, `qa`, `sbx`, `prd`.
-2. Em **sbx** e **prd**: em **Deployment protection rules**, marque **Required reviewers** e adicione os aprovadores.
-3. Em cada environment, em **Deployment branches**, restrinja à branch correspondente (ex.: env `prd` apenas branch `prd`).
+| Benefício | Descrição |
+|-----------|-----------|
+| **Segurança** | Credenciais de produção isoladas |
+| **Governança** | Aprovação obrigatória para prd/sbx |
+| **Rastreabilidade** | Histórico completo de deploys |
+| **Zero Plain Text** | Nenhum secret exposto nos YAMLs |
 
-### 2. Environment variables (por ambiente)
+---
 
-Em cada environment, em **Environment variables**:
+## ⚙️ Como Funciona
 
-| Variable | Obrigatório | Descrição |
-|----------|-------------|-----------|
-| `ECR_REGISTRY` | Sim | URL do registry ECR (ex.: `123456789.dkr.ecr.us-east-1.amazonaws.com`) |
-| `ALB_NAME` | Sim (API) | Nome do Application Load Balancer existente (ex.: `invoisys-dev-internal-lb`). Usado quando `create_target_group_and_listener: true`. |
+### Arquitetura de Isolamento
 
-### 3. Environment secrets (por ambiente)
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                        GitHub Repository                             │
+│  ┌───────────────────────────────────────────────────────────────┐  │
+│  │                    GitHub Environments                         │  │
+│  │  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌──────────┐ │  │
+│  │  │     dev     │ │     qa      │ │     sbx     │ │    prd   │ │  │
+│  │  │ ─────────── │ │ ─────────── │ │ ─────────── │ │ ──────── │ │  │
+│  │  │ Branch: dev │ │ Branch: qa  │ │ Branch: sbx │ │Branch:prd│ │  │
+│  │  │ Approval: ❌│ │ Approval: ❌│ │ Approval: ✅│ │Approval:✅│ │  │
+│  │  │             │ │             │ │             │ │          │ │  │
+│  │  │ 🔑 Secrets  │ │ 🔑 Secrets  │ │ 🔑 Secrets  │ │🔑 Secrets│ │  │
+│  │  │ AWS_KEY_DEV │ │ AWS_KEY_QA  │ │ AWS_KEY_SBX │ │AWS_KEY_PR│ │  │
+│  │  │             │ │             │ │             │ │          │ │  │
+│  │  │ 📝 Variables│ │ 📝 Variables│ │ 📝 Variables│ │📝Vars    │ │  │
+│  │  │ ECR_REG_DEV │ │ ECR_REG_QA  │ │ ECR_REG_SBX │ │ECR_REG_PR│ │  │
+│  │  └─────────────┘ └─────────────┘ └─────────────┘ └──────────┘ │  │
+│  └───────────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────┘
+                                │
+                                ▼
+                    ┌─────────────────────┐
+                    │   AWS (por conta)   │
+                    │  ┌───────────────┐  │
+                    │  │ dev account   │  │
+                    │  │ qa account    │  │
+                    │  │ sbx account   │  │
+                    │  │ prd account   │  │
+                    │  └───────────────┘  │
+                    └─────────────────────┘
+```
 
-Em cada environment, em **Environment secrets**:
+### Fluxo de Seleção de Environment
+
+```mermaid
+flowchart LR
+    A[Push para branch] --> B{Qual branch?}
+    B -->|dev| C[Environment: dev]
+    B -->|qa| D[Environment: qa]
+    B -->|sbx| E[Environment: sbx]
+    B -->|prd| F[Environment: prd]
+    
+    C --> G[Secrets de dev]
+    D --> H[Secrets de qa]
+    E --> I[Aprovação Required] --> J[Secrets de sbx]
+    F --> K[Aprovação Required] --> L[Secrets de prd]
+```
+
+---
+
+## 📝 Passo a Passo
+
+### 1️⃣ Criar os Environments
+
+1. Vá em **Settings > Environments** no repositório da aplicação
+2. Clique em **New environment**
+3. Crie os 4 environments: `dev`, `qa`, `sbx`, `prd`
+
+### 2️⃣ Configurar Protection Rules
+
+Para cada environment, configure:
+
+#### dev / qa (sem aprovação)
+```
+Deployment branches: Selected branches
+  └── dev (ou qa)
+Wait timer: 0
+Required reviewers: ❌ Desabilitado
+```
+
+#### sbx / prd (com aprovação)
+```
+Deployment branches: Selected branches
+  └── sbx (ou prd)
+Wait timer: 0 (ou delay desejado)
+Required reviewers: ✅ Habilitado
+  └── Adicione os aprovadores
+```
+
+### 3️⃣ Adicionar Variables
+
+Em cada environment, vá em **Environment variables** e adicione:
+
+| Variable | dev | qa | sbx | prd |
+|----------|-----|----|----|-----|
+| `ECR_REGISTRY` | `111.dkr.ecr...` | `222.dkr.ecr...` | `333.dkr.ecr...` | `444.dkr.ecr...` |
+| `ECS_CLUSTER` | `cluster-dev` | `cluster-qa` | `cluster-sbx` | `cluster-prd` |
+| `ALB_NAME` | `alb-dev` | `alb-qa` | `alb-sbx` | `alb-prd` |
+| `ECS_SUBNET_IDS` | `subnet-aaa,...` | `subnet-bbb,...` | `subnet-ccc,...` | `subnet-ddd,...` |
+| `ECS_SECURITY_GROUP_IDS` | `sg-aaa` | `sg-bbb` | `sg-ccc` | `sg-ddd` |
+| `ECS_TASK_EXECUTION_ROLE_ARN` | `arn:aws:iam::111:role/...` | `arn:aws:iam::222:role/...` | `arn:aws:iam::333:role/...` | `arn:aws:iam::444:role/...` |
+
+### 4️⃣ Adicionar Secrets
+
+Em cada environment, vá em **Environment secrets** e adicione:
+
+| Secret | Descrição |
+|--------|-----------|
+| `AWS_ACCESS_KEY_ID` | Access Key da conta AWS do ambiente |
+| `AWS_SECRET_ACCESS_KEY` | Secret Key correspondente |
+
+> ⚠️ **Importante**: Use credenciais com **permissões mínimas** necessárias.
+
+---
+
+## 📖 Referência de Configuração
+
+### Variables (Environment Variables)
+
+| Variable | Obrigatório | Descrição | Exemplo |
+|----------|-------------|-----------|---------|
+| `ECR_REGISTRY` | ✅ | URL do Amazon ECR | `123456789.dkr.ecr.us-east-1.amazonaws.com` |
+| `ECS_CLUSTER` | ✅ | Nome do cluster ECS | `meu-cluster-dev` |
+| `ALB_NAME` | API | Nome do Application Load Balancer | `alb-interno-dev` |
+| `ECS_SUBNET_IDS` | 1º deploy | IDs das subnets (vírgula) | `subnet-abc,subnet-def` |
+| `ECS_SECURITY_GROUP_IDS` | 1º deploy | IDs dos Security Groups | `sg-abc123` |
+| `ECS_TASK_EXECUTION_ROLE_ARN` | ✅ | ARN da role de execução | `arn:aws:iam::123:role/ecsTaskExecutionRole` |
+| `ECS_TASK_ROLE_ARN` | Opcional | ARN da role da task (ECS Exec, S3, etc) | `arn:aws:iam::123:role/ecsTaskRole` |
+
+### Secrets (Environment Secrets)
 
 | Secret | Obrigatório | Descrição |
 |--------|-------------|-----------|
-| `AWS_ACCESS_KEY_ID` | Sim | Access Key da conta/role AWS do ambiente |
-| `AWS_SECRET_ACCESS_KEY` | Sim | Secret Key correspondente |
-| `ECS_CLUSTER` | Não* | Nome do cluster ECS (ex.: `cluster-dev`); pode ser passado como input `ecs_cluster` |
-| `ECS_TASK_EXECUTION_ROLE_ARN` | Não* | ARN da role de execução da task; pode ser passado como input `ecs_task_execution_role_arn` |
+| `AWS_ACCESS_KEY_ID` | ✅ | Access Key ID da AWS |
+| `AWS_SECRET_ACCESS_KEY` | ✅ | Secret Access Key da AWS |
+| `REPO_ACCESS_TOKEN` | Opcional | Token para acessar repo privado de templates |
 
-\* Para o primeiro deploy (service ainda não existe), informe **cluster** via input ou secret. O **ecs_service** é sempre passado como input. A **role de execução** é obrigatória em todo deploy (input ou secret).
+### Permissões AWS Necessárias
 
-### 4. Configuração do serviço ECS (inputs do workflow)
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ecr:GetAuthorizationToken",
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:GetDownloadUrlForLayer",
+        "ecr:BatchGetImage",
+        "ecr:PutImage",
+        "ecr:InitiateLayerUpload",
+        "ecr:UploadLayerPart",
+        "ecr:CompleteLayerUpload"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ecs:DescribeServices",
+        "ecs:UpdateService",
+        "ecs:CreateService",
+        "ecs:RegisterTaskDefinition",
+        "ecs:DescribeTaskDefinition",
+        "ecs:ListServices"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "elasticloadbalancing:DescribeTargetGroups",
+        "elasticloadbalancing:CreateTargetGroup",
+        "elasticloadbalancing:DescribeListeners",
+        "elasticloadbalancing:CreateListener",
+        "elasticloadbalancing:DescribeRules",
+        "elasticloadbalancing:CreateRule",
+        "elasticloadbalancing:DescribeLoadBalancers",
+        "elasticloadbalancing:ModifyTargetGroupAttributes"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DescribeSubnets",
+        "ec2:DescribeSecurityGroups"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": [
+        "arn:aws:iam::*:role/ecsTaskExecutionRole*",
+        "arn:aws:iam::*:role/ecsTaskRole*"
+      ]
+    }
+  ]
+}
+```
 
-O pipeline suporta criar ou atualizar o service ECS:
+---
 
-- **Service já existe no cluster**: atualiza com nova task definition (imagem do build).
-- **Service não existe**: cria a task definition e o service (com rede e, para API, Load Balancer).
+## 🔄 Fluxograma de Autenticação
 
-**Obrigatório para todo deploy:**
+```mermaid
+sequenceDiagram
+    participant GHA as GitHub Actions
+    participant ENV as Environment
+    participant AWS as AWS
+    participant ECR as ECR
+    participant ECS as ECS
 
-- `ecs_service` (nome do service ECS e da task definition)
-- `ecr_repo` (nome do repositório ECR)
-- `ecs_task_execution_role_arn` (ou secret `ECS_TASK_EXECUTION_ROLE_ARN`)
-- `ecs_cluster` (ou secret `ECS_CLUSTER`)
+    GHA->>ENV: Solicita secrets (branch → environment)
+    ENV-->>GHA: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+    
+    GHA->>AWS: Configure credentials
+    AWS-->>GHA: Session token
+    
+    GHA->>ECR: docker login
+    ECR-->>GHA: Autenticado
+    
+    GHA->>ECR: docker push
+    ECR-->>GHA: Imagem armazenada
+    
+    GHA->>ECS: register-task-definition
+    ECS-->>GHA: Task ARN
+    
+    GHA->>ECS: update-service / create-service
+    ECS-->>GHA: Deployment iniciado
+    
+    GHA->>ECS: wait services-stable
+    ECS-->>GHA: ✅ Serviço estável
+```
 
-**Para criar o service (primeiro deploy):**
+---
 
-- `subnet_ids`: IDs das subnets separados por vírgula
-- `security_group_ids`: IDs dos security groups separados por vírgula
+## 🔍 Troubleshooting
 
-**Para API (service_type=api) com Load Balancer:**
+### Problemas Comuns
 
-O pipeline obtém ou cria o target group e o listener no ALB de forma **idempotente** (só cria se não existir), como no console AWS.
+| Erro | Causa | Solução |
+|------|-------|---------|
+| `Environment not found` | Environment não existe | Crie o environment no repositório |
+| `Deployment blocked` | Requer aprovação | Aprove no GitHub ou revise reviewers |
+| `Access Denied (ECR)` | Credenciais sem permissão | Verifique policy IAM |
+| `Variable not set` | Variable não configurada | Adicione no environment correto |
+| `Branch not allowed` | Branch não autorizada | Configure Deployment branches |
 
-- `create_target_group_and_listener`: `true`
-- `load_balancer_name` (ou `load_balancer_arn`): nome ou ARN do ALB existente. Configure a variável `ALB_NAME` por ambiente (ex.: `invoisys-dev-internal-lb`, `invoisys-prd-internal-lb`).
-- `target_group_name`: nome do target group (ex.: `tg-inbound-nfe-${{ github.ref_name }}`). Se já existir na mesma VPC, o pipeline reutiliza.
-- `listener_port`, `listener_protocol`: ex.: `80`, `HTTP`. Se já existir listener nessa porta no ALB apontando para o mesmo TG, nada é criado.
-- `container_name`: nome do container na task definition (default: `app`)
-- `container_port`: porta exposta (default: `80`)
+### Verificar Configuração
 
-Opcionais: `target_group_port`, `target_group_health_check_path`, `target_group_deregistration_delay_seconds`, `listener_certificate_arn` (para HTTPS).
+```bash
+# No workflow, adicione um step para debug:
+- name: Debug environment
+  run: |
+    echo "Environment: ${{ inputs.environment }}"
+    echo "ECR Registry: ${{ vars.ECR_REGISTRY }}"
+    echo "ECS Cluster: ${{ vars.ECS_CLUSTER }}"
+    # Nunca imprima secrets!
+```
 
-**Worker (service_type=worker):** não usa Load Balancer; não informe parâmetros de LB.
+### Logs de Auditoria
 
-**Task definition (cenário real ECS):**
+Todos os deploys ficam registrados em:
+- **Actions** → Run específico → Summary
+- **Environments** → Histórico de deployments
+- **Artifact** → `deploy.json` com metadados
 
-- `container_environment`: JSON array de variáveis de ambiente no container (ex.: `[{"name":"INVOISYS_ENV","value":"prd"}]`). Use variáveis do environment ou secret para não expor valores sensíveis no YAML.
-- `container_secrets`: JSON array de referências a Secrets Manager (ex.: `[{"name":"ConnectionStrings__PostgreSql","valueFrom":"arn:aws:secretsmanager:..."}]`).
-- `runtime_cpu_architecture`, `runtime_os_family`: ex.: X86_64, LINUX (compatível com task definitions Fargate).
-- `awslogs_mode`, `awslogs_create_group`, `awslogs_max_buffer_size`: opções de log (ex.: non-blocking, true, 25m).
-- `port_mapping_app_protocol`: ex.: http.
+---
 
-**Service (cenário real ECS):**
+## 📚 Referências
 
-- `enable_zone_rebalancing`: ativar rebalanceamento de zonas de disponibilidade.
-- `health_check_grace_period_seconds`: período de carência do health check (segundos).
-- `deployment_circuit_breaker_enable`, `deployment_circuit_breaker_rollback`: disjuntor de implantação e rollback automático.
-- `capacity_provider_strategy`: ex.: `FARGATE:0:1,FARGATE_SPOT:0:4` (provider:base:weight). Se informado, o create-service usa capacity provider strategy em vez de apenas launch-type FARGATE; update-service não altera essa configuração.
-- `platform_version`: ex.: 1.4.0.
-- `enable_execute_command`: ECS Exec (comandos interativos no container).
-- `deployment_minimum_healthy_percent`, `deployment_maximum_percent`: ex.: 100, 200.
-
-**Outros inputs opcionais:** `ecs_task_role_arn`, `task_cpu`, `task_memory`, `assign_public_ip`, `desired_count`.
-
-**Logs:** o pipeline usa o log group `/ecs/<nome-do-service>`. Crie o log group no CloudWatch (ou garanta que a role de execução tenha permissão `logs:CreateLogGroup`).
-
-### 5. Repositório de templates (este repo)
-
-- Os **secrets** e **variables** são configurados no **repositório da aplicação** (ou na organização) que chama o workflow.
-- O job do caller usa `environment: ${{ github.ref_name }}` e `secrets: inherit`; o caller passa `ecs_service`, `ecr_repo` e `ecr_registry: ${{ vars.ECR_REGISTRY }}`.
-
-### 6. Resumo de segurança
-
-- Zero secrets em plain text nos YAMLs.
-- Cada ambiente tem credenciais isoladas.
-- sbx e prd exigem aprovação manual antes do deploy e do rollback em prd.
+- [GitHub Environments Documentation](https://docs.github.com/en/actions/deployment/targeting-different-environments/using-environments-for-deployment)
+- [AWS ECS IAM Policies](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/security-iam.html)
+- [GitHub Encrypted Secrets](https://docs.github.com/en/actions/security-guides/encrypted-secrets)
