@@ -171,6 +171,21 @@ on:
         required: false
         type: string
         default: '300'
+      listener_rule_path_pattern:
+        description: 'Path pattern para regra do listener (ex.: /api/nfe/*). Se vazio, usa /<ecs_service>*'
+        required: false
+        type: string
+        default: ''
+      listener_rule_host_header:
+        description: 'Host header para regra do listener (ex.: api.example.com). Se informado, usa host-header em vez de path-pattern.'
+        required: false
+        type: string
+        default: ''
+      listener_rule_priority:
+        description: 'Prioridade da regra do listener (1-50000). Se vazio, usa a próxima disponível.'
+        required: false
+        type: string
+        default: ''
       container_name:
         description: 'Nome do container na task definition (para mapear ao LB; default: app)'
         required: false
@@ -468,6 +483,9 @@ jobs:
           TG_HEALTH_CHECK_PATH: ${{ inputs.target_group_health_check_path }}
           TG_HEALTH_CHECK_PROTOCOL: ${{ inputs.target_group_health_check_protocol }}
           TG_DEREGISTRATION_DELAY: ${{ inputs.target_group_deregistration_delay_seconds }}
+          LISTENER_RULE_PATH: ${{ inputs.listener_rule_path_pattern }}
+          LISTENER_RULE_HOST: ${{ inputs.listener_rule_host_header }}
+          LISTENER_RULE_PRIORITY: ${{ inputs.listener_rule_priority }}
           SERVICE_TYPE: ${{ inputs.service_type }}
           AWS_REGION: ${{ inputs.aws_region }}
           CONTAINER_ENVIRONMENT: ${{ inputs.container_environment }}
@@ -864,7 +882,75 @@ jobs:
               if [ -n "$TG_ALREADY_IN_LISTENER" ]; then
                 echo "✅ Target group já está associado ao listener (regra: $TG_ALREADY_IN_LISTENER)"
               else
-                echo "📝 Target group será associado ao ECS Service (registro automático via load-balancers)"
+                # Criar regra no listener para associar o TG ao LB
+                echo "📝 Criando regra no listener para associar TG ao Load Balancer..."
+                
+                # Determinar prioridade da regra
+                if [ -n "$LISTENER_RULE_PRIORITY" ]; then
+                  NEW_PRIORITY="$LISTENER_RULE_PRIORITY"
+                else
+                  # Obter a maior prioridade existente e incrementar
+                  MAX_PRIORITY=$(echo "$EXISTING_RULES" | jq '[.Rules[] | select(.Priority != "default") | .Priority | tonumber] | max // 0')
+                  NEW_PRIORITY=$((MAX_PRIORITY + 1))
+                fi
+                
+                # Construir condições da regra usando JSON (suporta múltiplas condições)
+                # Se ambos host-header E path-pattern forem informados, usa os dois (AND)
+                RULE_CONDITIONS_FILE=$(mktemp)
+                RULE_DESC=""
+                
+                if [ -n "$LISTENER_RULE_HOST" ] && [ -n "$LISTENER_RULE_PATH" ]; then
+                  # Ambas as condições: host-header E path-pattern
+                  jq -n --arg host "$LISTENER_RULE_HOST" --arg path "$LISTENER_RULE_PATH" '[
+                    { "Field": "host-header", "HostHeaderConfig": { "Values": [$host] } },
+                    { "Field": "path-pattern", "PathPatternConfig": { "Values": [$path] } }
+                  ]' > "$RULE_CONDITIONS_FILE"
+                  RULE_DESC="Host: $LISTENER_RULE_HOST E Path: $LISTENER_RULE_PATH"
+                elif [ -n "$LISTENER_RULE_HOST" ]; then
+                  # Apenas host-header
+                  jq -n --arg host "$LISTENER_RULE_HOST" '[
+                    { "Field": "host-header", "HostHeaderConfig": { "Values": [$host] } }
+                  ]' > "$RULE_CONDITIONS_FILE"
+                  RULE_DESC="Host: $LISTENER_RULE_HOST"
+                else
+                  # Apenas path-pattern (ou default)
+                  if [ -n "$LISTENER_RULE_PATH" ]; then
+                    RULE_PATH="$LISTENER_RULE_PATH"
+                  else
+                    RULE_PATH="/${SERVICE}*"
+                  fi
+                  jq -n --arg path "$RULE_PATH" '[
+                    { "Field": "path-pattern", "PathPatternConfig": { "Values": [$path] } }
+                  ]' > "$RULE_CONDITIONS_FILE"
+                  RULE_DESC="Path: $RULE_PATH"
+                fi
+                
+                echo "   Prioridade: $NEW_PRIORITY"
+                echo "   Condição: $RULE_DESC"
+                echo "   Conditions JSON:"
+                cat "$RULE_CONDITIONS_FILE" | jq .
+                
+                RULE_CREATE_OUTPUT=$(aws elbv2 create-rule \
+                  --listener-arn "$LISTENER_ARN" \
+                  --priority "$NEW_PRIORITY" \
+                  --conditions "file://${RULE_CONDITIONS_FILE}" \
+                  --actions "Type=forward,TargetGroupArn=$TARGET_GROUP_ARN" \
+                  --query 'Rules[0].RuleArn' --output text 2>&1) || true
+                
+                rm -f "$RULE_CONDITIONS_FILE"
+                
+                if echo "$RULE_CREATE_OUTPUT" | grep -q "^arn:aws:"; then
+                  echo "✅ Regra criada no listener: $RULE_CREATE_OUTPUT"
+                  echo "   $RULE_DESC → $TARGET_GROUP_ARN"
+                else
+                  echo "❌ Falha ao criar regra no listener. Erro:"
+                  echo "$RULE_CREATE_OUTPUT"
+                  echo ""
+                  echo "⚠️ Tentando criar regra como default action..."
+                  # Se não conseguir criar regra, tentar modificar default action
+                  # (só funciona se o listener não tiver default action configurado para outro TG importante)
+                  exit 1
+                fi
               fi
             fi
 
