@@ -685,48 +685,88 @@ jobs:
             echo "✅ Task definition: $NEW_TASK_ARN"
           fi
 
-          # Parâmetros comuns para create-service e update-service (novos cenário real ECS)
+          # Parâmetros comuns para create-service e update-service
           EXTRA_UPDATE_ARGS=""
           [ "$ENABLE_ZONE_REBALANCING" = "true" ] && EXTRA_UPDATE_ARGS="$EXTRA_UPDATE_ARGS --enable-zone-rebalancing"
           [ -n "$HEALTH_GRACE_PERIOD" ] && EXTRA_UPDATE_ARGS="$EXTRA_UPDATE_ARGS --health-check-grace-period-seconds $HEALTH_GRACE_PERIOD"
-          if [ "$CIRCUIT_BREAKER_ENABLE" = "true" ]; then
-            EXTRA_UPDATE_ARGS="$EXTRA_UPDATE_ARGS --deployment-circuit-breaker enable=$CIRCUIT_BREAKER_ENABLE,rollback=$CIRCUIT_BREAKER_ROLLBACK"
-          fi
           [ -n "$PLATFORM_VERSION" ] && EXTRA_UPDATE_ARGS="$EXTRA_UPDATE_ARGS --platform-version $PLATFORM_VERSION"
           [ "$ENABLE_EXEC_COMMAND" = "true" ] && EXTRA_UPDATE_ARGS="$EXTRA_UPDATE_ARGS --enable-execute-command"
-          if [ -n "$DEPLOY_MIN_HEALTHY" ] || [ -n "$DEPLOY_MAX_PERCENT" ]; then
-            DEPLOY_CFG=""
-            [ -n "$DEPLOY_MIN_HEALTHY" ] && DEPLOY_CFG="minimumHealthyPercent=$DEPLOY_MIN_HEALTHY"
-            [ -n "$DEPLOY_MAX_PERCENT" ] && { [ -n "$DEPLOY_CFG" ] && DEPLOY_CFG="$DEPLOY_CFG,maximumPercent=$DEPLOY_MAX_PERCENT" || DEPLOY_CFG="maximumPercent=$DEPLOY_MAX_PERCENT"; }
-            [ -n "$DEPLOY_CFG" ] && EXTRA_UPDATE_ARGS="$EXTRA_UPDATE_ARGS --deployment-configuration '$DEPLOY_CFG'"
+          
+          # Deployment configuration (JSON)
+          DEPLOY_CONFIG_FILE=""
+          if [ "$CIRCUIT_BREAKER_ENABLE" = "true" ] || [ -n "$DEPLOY_MIN_HEALTHY" ] || [ -n "$DEPLOY_MAX_PERCENT" ]; then
+            DEPLOY_CONFIG_JSON=$(jq -n '{}')
+            
+            if [ "$CIRCUIT_BREAKER_ENABLE" = "true" ]; then
+              # Converter string "true"/"false" para booleano JSON
+              ROLLBACK_BOOL="false"
+              [ "$CIRCUIT_BREAKER_ROLLBACK" = "true" ] && ROLLBACK_BOOL="true"
+              DEPLOY_CONFIG_JSON=$(echo "$DEPLOY_CONFIG_JSON" | jq --argjson enable true --argjson rollback "$ROLLBACK_BOOL" \
+                '. + {deploymentCircuitBreaker: {enable: $enable, rollback: $rollback}}')
+            fi
+            
+            if [ -n "$DEPLOY_MIN_HEALTHY" ]; then
+              DEPLOY_CONFIG_JSON=$(echo "$DEPLOY_CONFIG_JSON" | jq --argjson min "$DEPLOY_MIN_HEALTHY" '. + {minimumHealthyPercent: $min}')
+            fi
+            
+            if [ -n "$DEPLOY_MAX_PERCENT" ]; then
+              DEPLOY_CONFIG_JSON=$(echo "$DEPLOY_CONFIG_JSON" | jq --argjson max "$DEPLOY_MAX_PERCENT" '. + {maximumPercent: $max}')
+            fi
+            
+            DEPLOY_CONFIG_FILE=$(mktemp)
+            echo "$DEPLOY_CONFIG_JSON" > "$DEPLOY_CONFIG_FILE"
+            
+            echo "📋 Deployment Configuration:"
+            cat "$DEPLOY_CONFIG_FILE" | jq .
           fi
 
           LAUNCH_OR_CAPACITY=""
+          CAPACITY_FILE=""
           if [ -n "$CAPACITY_PROVIDER_STRATEGY" ]; then
-            CAP_PARTS=""
-            for part in $(echo "$CAPACITY_PROVIDER_STRATEGY" | tr ',' ' '); do
+            # Construir array JSON para capacity provider strategy
+            # Formato de entrada: FARGATE_SPOT:0:4 (provider:base:weight)
+            CAPACITY_FILE=$(mktemp)
+            echo "[" > "$CAPACITY_FILE"
+            FIRST=true
+            IFS=',' read -ra PARTS <<< "$CAPACITY_PROVIDER_STRATEGY"
+            for part in "${PARTS[@]}"; do
               prov=$(echo "$part" | cut -d':' -f1)
               base=$(echo "$part" | cut -d':' -f2)
               weight=$(echo "$part" | cut -d':' -f3)
               [ -z "$base" ] && base=0
               [ -z "$weight" ] && weight=1
-              entry="capacityProvider=$prov,weight=$weight,base=$base"
-              CAP_PARTS="$CAP_PARTS \"$entry\""
+              if [ "$FIRST" = true ]; then
+                FIRST=false
+              else
+                echo "," >> "$CAPACITY_FILE"
+              fi
+              jq -n --arg p "$prov" --argjson w "$weight" --argjson b "$base" \
+                '{capacityProvider: $p, weight: $w, base: $b}' >> "$CAPACITY_FILE"
             done
-            LAUNCH_OR_CAPACITY="--capacity-provider-strategy $CAP_PARTS"
+            echo "]" >> "$CAPACITY_FILE"
+            
+            echo "📋 Capacity Provider Strategy:"
+            cat "$CAPACITY_FILE" | jq .
+            
+            LAUNCH_OR_CAPACITY="--capacity-provider-strategy file://${CAPACITY_FILE}"
           else
             LAUNCH_OR_CAPACITY="--launch-type FARGATE"
           fi
 
           if [ "$SERVICE_EXISTS" = "true" ]; then
-            eval aws ecs update-service \
-              --cluster "$CLUSTER" \
-              --service "$SERVICE" \
-              --task-definition "$NEW_TASK_ARN" \
-              --force-new-deployment \
-              $EXTRA_UPDATE_ARGS \
-              --query 'service.serviceArn' \
-              --output text
+            UPDATE_CMD="aws ecs update-service --cluster $CLUSTER --service $SERVICE --task-definition $NEW_TASK_ARN --force-new-deployment"
+            
+            [ "$ENABLE_ZONE_REBALANCING" = "true" ] && UPDATE_CMD="$UPDATE_CMD --enable-zone-rebalancing"
+            [ -n "$HEALTH_GRACE_PERIOD" ] && UPDATE_CMD="$UPDATE_CMD --health-check-grace-period-seconds $HEALTH_GRACE_PERIOD"
+            [ -n "$PLATFORM_VERSION" ] && UPDATE_CMD="$UPDATE_CMD --platform-version $PLATFORM_VERSION"
+            [ "$ENABLE_EXEC_COMMAND" = "true" ] && UPDATE_CMD="$UPDATE_CMD --enable-execute-command"
+            [ -n "$DEPLOY_CONFIG_FILE" ] && UPDATE_CMD="$UPDATE_CMD --deployment-configuration file://${DEPLOY_CONFIG_FILE}"
+            
+            $UPDATE_CMD --query 'service.serviceArn' --output text
+            
+            # Limpar arquivos temporários
+            [ -n "$DEPLOY_CONFIG_FILE" ] && rm -f "$DEPLOY_CONFIG_FILE"
+            [ -n "$CAPACITY_FILE" ] && rm -f "$CAPACITY_FILE"
           else
             echo "🆕 Service não existe: criando service e registrando no cluster..."
             if [ -z "$SUBNET_IDS" ] || [ -z "$SECURITY_GROUPS" ]; then
@@ -878,6 +918,8 @@ jobs:
             fi
             
             rm -f "$NETWORK_CONFIG_FILE"
+            [ -n "$CAPACITY_FILE" ] && rm -f "$CAPACITY_FILE"
+            [ -n "$DEPLOY_CONFIG_FILE" ] && rm -f "$DEPLOY_CONFIG_FILE"
           fi
 
           echo "service_arn=$(aws ecs describe-services --cluster $CLUSTER --services $SERVICE --query 'services[0].serviceArn' --output text)" >> $GITHUB_OUTPUT
