@@ -16,9 +16,10 @@ on:
         required: true
         type: string
       ecr_registry:
-        description: 'URL do registry ECR (ex.: vars.ECR_REGISTRY ou 123456789012.dkr.ecr.us-east-1.amazonaws.com)'
-        required: true
+        description: 'URL do registry ECR (ex.: vars.ECR_REGISTRY). Se vazio, usa o registry retornado pelo login ECR.'
+        required: false
         type: string
+        default: ''
       environment:
         description: 'Ambiente (dev|qa|sbx|prd); caller passa github.ref_name'
         required: true
@@ -406,11 +407,25 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
+      - name: Definir registry ECR
+        id: registry
+        run: |
+          REGISTRY="${{ steps.validate.outputs.ecr_registry }}"
+          if [ -z "$REGISTRY" ]; then
+            REGISTRY="${{ steps.login-ecr.outputs.registry }}"
+          fi
+          if [ -z "$REGISTRY" ]; then
+            echo "❌ Registry ECR vazio. Configure vars.ECR_REGISTRY ou verifique o login ECR."
+            exit 1
+          fi
+          echo "registry=${REGISTRY}" >> $GITHUB_OUTPUT
+          echo "✅ Registry: ${REGISTRY}"
+
       - name: Tag and Push to ECR
         id: ecr-push
         env:
           ECR_REPO: ${{ steps.validate.outputs.ecr_repository }}
-          REGISTRY: ${{ steps.validate.outputs.ecr_registry }}
+          REGISTRY: ${{ steps.registry.outputs.registry }}
         run: |
           FULL_IMAGE="${REGISTRY}/${ECR_REPO}:${{ github.sha }}"
           docker tag ci-build "$FULL_IMAGE"
@@ -430,7 +445,7 @@ jobs:
         env:
           CLUSTER: ${{ inputs.ecs_cluster || secrets.ECS_CLUSTER }}
           SERVICE: ${{ steps.validate.outputs.ecs_service }}
-          REGISTRY: ${{ steps.validate.outputs.ecr_registry }}
+          REGISTRY: ${{ steps.registry.outputs.registry }}
           ECR_REPO: ${{ steps.validate.outputs.ecr_repository }}
           IMAGE_TAG: ${{ steps.ecr-push.outputs.image_tag }}
           TASK_EXEC_ROLE: ${{ inputs.ecs_task_execution_role_arn || secrets.ECS_TASK_EXECUTION_ROLE_ARN }}
