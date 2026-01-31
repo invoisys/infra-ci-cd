@@ -836,6 +836,10 @@ jobs:
               --arg assign "$ASSIGN_PUBLIC_IP" \
               '{ awsvpcConfiguration: { subnets: $subnets, securityGroups: $sgs, assignPublicIp: $assign } }')
 
+            # Salvar NETWORK_CONFIG em arquivo temporário para evitar problemas de escape
+            NETWORK_CONFIG_FILE=$(mktemp)
+            echo "$NETWORK_CONFIG" > "$NETWORK_CONFIG_FILE"
+
             if [ "$SERVICE_TYPE" = "api" ] && [ -n "$TARGET_GROUP_ARN" ]; then
               echo "📌 API com Load Balancer: target group $TARGET_GROUP_ARN"
               LB_JSON=$(jq -n \
@@ -843,30 +847,37 @@ jobs:
                 --arg cn "$CONTAINER_NAME" \
                 --argjson cp "$PORT_NUM" \
                 '[{ targetGroupArn: $tg, containerName: $cn, containerPort: $cp }]')
-              eval aws ecs create-service \
+              
+              # Salvar LB_JSON em arquivo temporário
+              LB_JSON_FILE=$(mktemp)
+              echo "$LB_JSON" > "$LB_JSON_FILE"
+              
+              aws ecs create-service \
                 --cluster "$CLUSTER" \
                 --service-name "$SERVICE" \
                 --task-definition "$NEW_TASK_ARN" \
                 --desired-count "$(echo "$DESIRED_COUNT" | sed 's/^0*//' || echo 1)" \
-                --network-configuration "$NETWORK_CONFIG" \
-                --load-balancers "$LB_JSON" \
-                $EXTRA_UPDATE_ARGS \
+                --network-configuration "file://${NETWORK_CONFIG_FILE}" \
+                --load-balancers "file://${LB_JSON_FILE}" \
                 $LAUNCH_OR_CAPACITY \
                 --query 'service.serviceArn' \
                 --output text
+              
+              rm -f "$LB_JSON_FILE"
             else
               echo "📌 Worker (sem Load Balancer)"
-              eval aws ecs create-service \
+              aws ecs create-service \
                 --cluster "$CLUSTER" \
                 --service-name "$SERVICE" \
                 --task-definition "$NEW_TASK_ARN" \
                 --desired-count "$(echo "$DESIRED_COUNT" | sed 's/^0*//' || echo 1)" \
-                --network-configuration "$NETWORK_CONFIG" \
-                $EXTRA_UPDATE_ARGS \
+                --network-configuration "file://${NETWORK_CONFIG_FILE}" \
                 $LAUNCH_OR_CAPACITY \
                 --query 'service.serviceArn' \
                 --output text
             fi
+            
+            rm -f "$NETWORK_CONFIG_FILE"
           fi
 
           echo "service_arn=$(aws ecs describe-services --cluster $CLUSTER --services $SERVICE --query 'services[0].serviceArn' --output text)" >> $GITHUB_OUTPUT
