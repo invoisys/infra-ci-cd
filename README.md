@@ -111,7 +111,16 @@ Substitua `SEU_ORG/infra-ci-cd` pelo repositório que contém os workflows.
 - **ECR**: Repositório com o nome **ecr_repo** (ex.: `inbound`). A imagem é tagueada com sha, branch e timestamp.
 - **Task Definition** e **ECS Service**: nome = **ecs_service**; imagem em `{ecr_registry}/{ecr_repo}:{tag}`.
 
-### 4. Testar
+### 4. API com Load Balancer (idempotente)
+
+Para **API** (`service_type: api`), o pipeline usa o modo **criar/obter target group e listener** no ALB (como no console AWS), com **idempotência**:
+
+- **Target group**: se já existir um TG com o nome informado na mesma VPC, o pipeline reutiliza; caso contrário, cria.
+- **Listener**: se já existir um listener na porta informada no ALB apontando para o mesmo TG, nada é criado; se a porta estiver livre, o listener é criado.
+
+Obrigatório para API no primeiro deploy: `create_target_group_and_listener: true`, `target_group_name`, e `load_balancer_name` (ou `load_balancer_arn`). Opcionais: `listener_port`, `listener_protocol`, `target_group_port`, `target_group_health_check_path`, `target_group_deregistration_delay_seconds`.
+
+### 5. Testar
 
 Push nas branches `dev`, `qa`, `sbx` ou `prd`; sbx e prd exigirão aprovação se configurada.
 
@@ -163,6 +172,12 @@ Push nas branches `dev`, `qa`, `sbx` ou `prd`; sbx e prd exigirão aprovação s
 | `enable_execute_command` | ECS Exec (comandos interativos no container) |
 | `deployment_minimum_healthy_percent`, `deployment_maximum_percent` | Ex.: 100, 200 (configuração de deploy) |
 | `enable_health_check`, `health_check_url` | Health check pós-deploy (opcional) |
+| **API: Load Balancer (idempotente)** | |
+| `create_target_group_and_listener` | `true` para API: obter ou criar TG e listener no ALB (só cria se não existir) |
+| `load_balancer_name` ou `load_balancer_arn` | ALB existente (nome ou ARN) |
+| `listener_port`, `listener_protocol` | Porta e protocolo do listener (ex.: 80, HTTP) |
+| `target_group_name`, `target_group_port` | Nome e porta do target group (ex.: tg-api-dev, 80) |
+| `target_group_health_check_path`, `target_group_deregistration_delay_seconds` | Health check do TG e demora no cancelamento do registro |
 
 ### Secrets (por environment)
 

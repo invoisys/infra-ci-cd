@@ -109,12 +109,67 @@ on:
         required: false
         type: string
         default: '1'
-      # --- API: Load Balancer (ignorado para worker) ---
-      load_balancer_target_group_arn:
-        description: 'ARN do target group do ALB (apenas service_type=api; worker não usa LB)'
+      # --- API: Load Balancer (ignorado para worker). Modo idempotente: TG e listener só criados se não existirem ---
+      create_target_group_and_listener:
+        description: 'Para API: true = obter ou criar target group e listener no ALB (como no console AWS). Idempotente: só cria se não existir.'
+        required: false
+        type: boolean
+        default: false
+      load_balancer_arn:
+        description: 'ARN do ALB (para create_target_group_and_listener). Alternativa: load_balancer_name.'
         required: false
         type: string
         default: ''
+      load_balancer_name:
+        description: 'Nome do ALB existente (pipeline resolve o ARN). Usado quando create_target_group_and_listener=true e load_balancer_arn vazio.'
+        required: false
+        type: string
+        default: ''
+      listener_port:
+        description: 'Porta do listener (ex.: 80). Idempotente: se já existir listener nessa porta apontando para o mesmo TG, nada é criado.'
+        required: false
+        type: string
+        default: '80'
+      listener_protocol:
+        description: 'Protocolo do listener (HTTP ou HTTPS). Para HTTPS informe certificate_arn em listener_certificate_arn.'
+        required: false
+        type: string
+        default: 'HTTP'
+      listener_certificate_arn:
+        description: 'ARN do certificado ACM (obrigatório se listener_protocol=HTTPS).'
+        required: false
+        type: string
+        default: ''
+      target_group_name:
+        description: 'Nome do target group. Idempotente: se já existir na mesma VPC, o pipeline reutiliza; caso contrário, cria.'
+        required: false
+        type: string
+        default: ''
+      target_group_port:
+        description: 'Porta do target group (ex.: 80). Deve coincidir com container_port para Fargate.'
+        required: false
+        type: string
+        default: '80'
+      target_group_protocol:
+        description: 'Protocolo do target group (HTTP ou HTTPS).'
+        required: false
+        type: string
+        default: 'HTTP'
+      target_group_health_check_path:
+        description: 'Caminho do health check do target group (ex.: / ou /health).'
+        required: false
+        type: string
+        default: '/'
+      target_group_health_check_protocol:
+        description: 'Protocolo do health check (HTTP ou HTTPS).'
+        required: false
+        type: string
+        default: 'HTTP'
+      target_group_deregistration_delay_seconds:
+        description: 'Demora no cancelamento do registro (segundos). Ex.: 300.'
+        required: false
+        type: string
+        default: '300'
       container_name:
         description: 'Nome do container na task definition (para mapear ao LB; default: app)'
         required: false
@@ -386,7 +441,18 @@ jobs:
           SECURITY_GROUPS: ${{ inputs.security_group_ids }}
           DESIRED_COUNT: ${{ inputs.desired_count || '1' }}
           ASSIGN_PUBLIC_IP: ${{ inputs.assign_public_ip || 'DISABLED' }}
-          TARGET_GROUP_ARN: ${{ inputs.load_balancer_target_group_arn }}
+          CREATE_TG_AND_LISTENER: ${{ inputs.create_target_group_and_listener }}
+          LOAD_BALANCER_ARN: ${{ inputs.load_balancer_arn }}
+          LOAD_BALANCER_NAME: ${{ inputs.load_balancer_name }}
+          LISTENER_PORT: ${{ inputs.listener_port }}
+          LISTENER_PROTOCOL: ${{ inputs.listener_protocol }}
+          LISTENER_CERTIFICATE_ARN: ${{ inputs.listener_certificate_arn }}
+          TG_NAME: ${{ inputs.target_group_name }}
+          TG_PORT: ${{ inputs.target_group_port }}
+          TG_PROTOCOL: ${{ inputs.target_group_protocol }}
+          TG_HEALTH_CHECK_PATH: ${{ inputs.target_group_health_check_path }}
+          TG_HEALTH_CHECK_PROTOCOL: ${{ inputs.target_group_health_check_protocol }}
+          TG_DEREGISTRATION_DELAY: ${{ inputs.target_group_deregistration_delay_seconds }}
           SERVICE_TYPE: ${{ inputs.service_type }}
           AWS_REGION: ${{ inputs.aws_region }}
           CONTAINER_ENVIRONMENT: ${{ inputs.container_environment }}
@@ -572,6 +638,96 @@ jobs:
               echo "❌ Para criar o service são obrigatórios: subnet_ids e security_group_ids"
               exit 1
             fi
+
+            # --- API: obter ou criar target group e listener (idempotente, como no console AWS) ---
+            TARGET_GROUP_ARN=""
+            if [ "$SERVICE_TYPE" = "api" ]; then
+              if [ "$CREATE_TG_AND_LISTENER" != "true" ] || [ -z "$TG_NAME" ]; then
+                echo "❌ Para API com Load Balancer é obrigatório: create_target_group_and_listener=true, target_group_name e load_balancer_arn ou load_balancer_name"
+                exit 1
+              fi
+              if [ -z "$LOAD_BALANCER_ARN" ] && [ -n "$LOAD_BALANCER_NAME" ]; then
+                LOAD_BALANCER_ARN=$(aws elbv2 describe-load-balancers --names "$LOAD_BALANCER_NAME" --query 'LoadBalancers[0].LoadBalancerArn' --output text 2>/dev/null || true)
+                if [ -z "$LOAD_BALANCER_ARN" ] || [ "$LOAD_BALANCER_ARN" = "None" ]; then
+                  echo "❌ Load balancer com nome '$LOAD_BALANCER_NAME' não encontrado"
+                  exit 1
+                fi
+                echo "✅ Load balancer encontrado: $LOAD_BALANCER_ARN"
+              fi
+              if [ -z "$LOAD_BALANCER_ARN" ]; then
+                echo "❌ Informe load_balancer_arn ou load_balancer_name"
+                exit 1
+              fi
+              FIRST_SUBNET=$(echo "$SUBNET_IDS" | cut -d',' -f1)
+              VPC_ID=$(aws ec2 describe-subnets --subnet-ids "$FIRST_SUBNET" --query 'Subnets[0].VpcId' --output text 2>/dev/null || true)
+              if [ -z "$VPC_ID" ] || [ "$VPC_ID" = "None" ]; then
+                echo "❌ Não foi possível obter VPC das subnets"
+                exit 1
+              fi
+              TG_PORT_NUM=${TG_PORT:-80}
+              TG_DEREG=${TG_DEREGISTRATION_DELAY:-300}
+              # Idempotência TG: usar existente se encontrar pelo nome na mesma VPC
+              EXISTING_TG_JSON=$(aws elbv2 describe-target-groups --names "$TG_NAME" --query 'TargetGroups[0]' --output json 2>/dev/null || echo "null")
+              if [ -n "$EXISTING_TG_JSON" ] && [ "$EXISTING_TG_JSON" != "null" ]; then
+                EXISTING_VPC=$(echo "$EXISTING_TG_JSON" | jq -r '.VpcId')
+                if [ "$EXISTING_VPC" = "$VPC_ID" ]; then
+                  TARGET_GROUP_ARN=$(echo "$EXISTING_TG_JSON" | jq -r '.TargetGroupArn')
+                  echo "✅ Target group já existe: $TARGET_GROUP_ARN"
+                else
+                  echo "❌ Target group com nome '$TG_NAME' já existe em outra VPC ($EXISTING_VPC). Use outro target_group_name ou a mesma VPC."
+                  exit 1
+                fi
+              fi
+              if [ -z "$TARGET_GROUP_ARN" ]; then
+                echo "📝 Criando target group: $TG_NAME (porta $TG_PORT_NUM, VPC $VPC_ID)..."
+                TARGET_GROUP_ARN=$(aws elbv2 create-target-group \
+                  --name "$TG_NAME" \
+                  --protocol "${TG_PROTOCOL:-HTTP}" \
+                  --port "$TG_PORT_NUM" \
+                  --vpc-id "$VPC_ID" \
+                  --target-type ip \
+                  --health-check-path "${TG_HEALTH_CHECK_PATH:-/}" \
+                  --health-check-protocol "${TG_HEALTH_CHECK_PROTOCOL:-HTTP}" \
+                  --deregistration-delay-seconds "$TG_DEREG" \
+                  --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null || true)
+                if [ -z "$TARGET_GROUP_ARN" ] || [ "$TARGET_GROUP_ARN" = "None" ]; then
+                  echo "❌ Falha ao criar target group"
+                  exit 1
+                fi
+                echo "✅ Target group criado: $TARGET_GROUP_ARN"
+              fi
+              LISTENER_PORT_NUM=${LISTENER_PORT:-80}
+              EXISTING_LISTENER_JSON=$(aws elbv2 describe-listeners --load-balancer-arn "$LOAD_BALANCER_ARN" --query "Listeners[?Port==\`$LISTENER_PORT_NUM\`]" --output json 2>/dev/null | jq '.[0]' 2>/dev/null || echo "null")
+              if [ -n "$EXISTING_LISTENER_JSON" ] && [ "$EXISTING_LISTENER_JSON" != "null" ]; then
+                EXISTING_TG_ARN=$(echo "$EXISTING_LISTENER_JSON" | jq -r '.DefaultActions[0].TargetGroupArn')
+                if [ "$EXISTING_TG_ARN" = "$TARGET_GROUP_ARN" ]; then
+                  echo "✅ Listener na porta $LISTENER_PORT_NUM já existe e aponta para este target group"
+                else
+                  echo "❌ Já existe um listener na porta $LISTENER_PORT_NUM neste ALB apontando para outro target group. Use outra porta (listener_port) ou o target_group_name correspondente."
+                  exit 1
+                fi
+              else
+                echo "📝 Criando listener na porta $LISTENER_PORT_NUM (${LISTENER_PROTOCOL:-HTTP})..."
+                if [ "${LISTENER_PROTOCOL}" = "HTTPS" ] && [ -n "$LISTENER_CERTIFICATE_ARN" ]; then
+                  aws elbv2 create-listener \
+                    --load-balancer-arn "$LOAD_BALANCER_ARN" \
+                    --port "$LISTENER_PORT_NUM" \
+                    --protocol HTTPS \
+                    --certificates "CertificateArn=$LISTENER_CERTIFICATE_ARN" \
+                    --default-actions "Type=forward,TargetGroupArn=$TARGET_GROUP_ARN" \
+                    --output text >/dev/null
+                else
+                  aws elbv2 create-listener \
+                    --load-balancer-arn "$LOAD_BALANCER_ARN" \
+                    --port "$LISTENER_PORT_NUM" \
+                    --protocol "${LISTENER_PROTOCOL:-HTTP}" \
+                    --default-actions "Type=forward,TargetGroupArn=$TARGET_GROUP_ARN" \
+                    --output text >/dev/null
+                fi
+                echo "✅ Listener criado"
+              fi
+            fi
+
             SUBNETS=$(echo "$SUBNET_IDS" | tr ',' '\n' | jq -R . | jq -s .)
             SGS=$(echo "$SECURITY_GROUPS" | tr ',' '\n' | jq -R . | jq -s .)
             NETWORK_CONFIG=$(jq -n \

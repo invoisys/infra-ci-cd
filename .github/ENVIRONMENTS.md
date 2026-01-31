@@ -35,6 +35,7 @@ Em cada environment, em **Environment variables**:
 | Variable | Obrigatório | Descrição |
 |----------|-------------|-----------|
 | `ECR_REGISTRY` | Sim | URL do registry ECR (ex.: `123456789.dkr.ecr.us-east-1.amazonaws.com`) |
+| `ALB_NAME` | Sim (API) | Nome do Application Load Balancer existente (ex.: `invoisys-dev-internal-lb`). Usado quando `create_target_group_and_listener: true`. |
 
 ### 3. Environment secrets (por ambiente)
 
@@ -70,11 +71,18 @@ O pipeline suporta criar ou atualizar o service ECS:
 
 **Para API (service_type=api) com Load Balancer:**
 
-- `load_balancer_target_group_arn`: ARN do target group do ALB (o path, ex. `/api/nfe/*`, é configurado na listener rule do ALB que aponta para esse target group)
+O pipeline obtém ou cria o target group e o listener no ALB de forma **idempotente** (só cria se não existir), como no console AWS.
+
+- `create_target_group_and_listener`: `true`
+- `load_balancer_name` (ou `load_balancer_arn`): nome ou ARN do ALB existente. Configure a variável `ALB_NAME` por ambiente (ex.: `invoisys-dev-internal-lb`, `invoisys-prd-internal-lb`).
+- `target_group_name`: nome do target group (ex.: `tg-inbound-nfe-${{ github.ref_name }}`). Se já existir na mesma VPC, o pipeline reutiliza.
+- `listener_port`, `listener_protocol`: ex.: `80`, `HTTP`. Se já existir listener nessa porta no ALB apontando para o mesmo TG, nada é criado.
 - `container_name`: nome do container na task definition (default: `app`)
 - `container_port`: porta exposta (default: `80`)
 
-**Worker (service_type=worker):** não usa Load Balancer; não informe `load_balancer_target_group_arn`.
+Opcionais: `target_group_port`, `target_group_health_check_path`, `target_group_deregistration_delay_seconds`, `listener_certificate_arn` (para HTTPS).
+
+**Worker (service_type=worker):** não usa Load Balancer; não informe parâmetros de LB.
 
 **Task definition (cenário real ECS):**
 
