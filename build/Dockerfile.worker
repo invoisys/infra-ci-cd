@@ -18,9 +18,6 @@ RUN dotnet publish "${PROJECT_NAME}/${PROJECT_NAME}.csproj" -c Release -o /app/p
 FROM mcr.microsoft.com/dotnet/runtime:8.0
 WORKDIR /app
 
-RUN adduser --disabled-password --gecos '' appuser && chown -R appuser /app
-USER appuser
-
 COPY --from=build /app/publish .
 
 ARG PROJECT_NAME
