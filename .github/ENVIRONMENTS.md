@@ -127,9 +127,9 @@ Em cada environment, vá em **Environment variables** e adicione:
 |----------|-----|----|----|-----|
 | `ECR_REGISTRY` | `111.dkr.ecr...` | `222.dkr.ecr...` | `333.dkr.ecr...` | `444.dkr.ecr...` |
 | `ECS_CLUSTER` | `cluster-dev` | `cluster-qa` | `cluster-sbx` | `cluster-prd` |
-| `ALB_NAME` | `alb-dev` | `alb-qa` | `alb-sbx` | `alb-prd` |
-| `ECS_SUBNET_IDS` | `subnet-aaa,...` | `subnet-bbb,...` | `subnet-ccc,...` | `subnet-ddd,...` |
-| `ECS_SECURITY_GROUP_IDS` | `sg-aaa` | `sg-bbb` | `sg-ccc` | `sg-ddd` |
+| `LOAD_BALANCER_NAME` | `alb-dev` | `alb-qa` | `alb-sbx` | `alb-prd` |
+| `SUBNET_IDS` | `subnet-aaa,...` | `subnet-bbb,...` | `subnet-ccc,...` | `subnet-ddd,...` |
+| `SECURITY_GROUP_IDS` | `sg-aaa` | `sg-bbb` | `sg-ccc` | `sg-ddd` |
 | `ECS_TASK_EXECUTION_ROLE_ARN` | `arn:aws:iam::111:role/...` | `arn:aws:iam::222:role/...` | `arn:aws:iam::333:role/...` | `arn:aws:iam::444:role/...` |
 
 ### 4️⃣ Adicionar Secrets
@@ -153,9 +153,9 @@ Em cada environment, vá em **Environment secrets** e adicione:
 |----------|-------------|-----------|---------|
 | `ECR_REGISTRY` | ✅ | URL do Amazon ECR | `123456789.dkr.ecr.us-east-1.amazonaws.com` |
 | `ECS_CLUSTER` | ✅ | Nome do cluster ECS | `meu-cluster-dev` |
-| `ALB_NAME` | API | Nome do Application Load Balancer | `alb-interno-dev` |
-| `ECS_SUBNET_IDS` | 1º deploy | IDs das subnets (vírgula) | `subnet-abc,subnet-def` |
-| `ECS_SECURITY_GROUP_IDS` | 1º deploy | IDs dos Security Groups | `sg-abc123` |
+| `LOAD_BALANCER_NAME` | API | Nome do Application Load Balancer | `alb-interno-dev` |
+| `SUBNET_IDS` | 1º deploy | IDs das subnets (vírgula) | `subnet-abc,subnet-def` |
+| `SECURITY_GROUP_IDS` | 1º deploy | IDs dos Security Groups | `sg-abc123` |
 | `ECS_TASK_EXECUTION_ROLE_ARN` | ✅ | ARN da role de execução | `arn:aws:iam::123:role/ecsTaskExecutionRole` |
 | `ECS_TASK_ROLE_ARN` | Opcional | ARN da role da task (ECS Exec, S3, etc) | `arn:aws:iam::123:role/ecsTaskRole` |
 
