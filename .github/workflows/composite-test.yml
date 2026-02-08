@@ -1,0 +1,156 @@
+# Composite Test Workflow
+# Technology-agnostic test workflow supporting .NET and Node.js
+
+name: Test
+
+on:
+  workflow_call:
+    inputs:
+      technology:
+        description: 'Technology: dotnet or node'
+        required: false
+        type: string
+        default: 'dotnet'
+      technology_version:
+        description: 'SDK version'
+        required: false
+        type: string
+        default: ''
+      working_directory:
+        description: 'Source code directory'
+        required: false
+        type: string
+        default: 'src'
+      skip_tests:
+        description: 'Skip test execution'
+        required: false
+        type: boolean
+        default: false
+      test_args:
+        description: 'Additional test arguments'
+        required: false
+        type: string
+        default: ''
+    outputs:
+      tests_passed:
+        description: 'Whether tests passed'
+        value: ${{ jobs.test.outputs.tests_passed }}
+      coverage_report_path:
+        description: 'Path to coverage report (if available)'
+        value: ${{ jobs.test.outputs.coverage_report_path }}
+
+jobs:
+  test:
+    name: Test (${{ inputs.technology }})
+    runs-on: ubuntu-latest
+    outputs:
+      tests_passed: ${{ steps.result.outputs.tests_passed }}
+      coverage_report_path: ${{ steps.result.outputs.coverage_report_path }}
+
+    steps:
+      - name: Skip tests (if requested)
+        if: inputs.skip_tests
+        id: skip
+        run: |
+          echo "⏭️ Tests skipped by request"
+          echo "tests_passed=true" >> $GITHUB_OUTPUT
+
+      - name: Validate technology
+        if: '!inputs.skip_tests'
+        run: |
+          TECH="${{ inputs.technology }}"
+          case "$TECH" in
+            dotnet|node) echo "✅ Technology: $TECH" ;;
+            *) echo "❌ Unknown technology: $TECH. Supported: dotnet, node" && exit 1 ;;
+          esac
+
+      - name: Checkout
+        if: '!inputs.skip_tests'
+        uses: actions/checkout@v4
+
+      # ===== .NET Setup =====
+      - name: Setup .NET
+        if: '!inputs.skip_tests && inputs.technology == ''dotnet'''
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ inputs.technology_version || '8.0' }}
+
+      - name: Cache NuGet
+        if: '!inputs.skip_tests && inputs.technology == ''dotnet'''
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles(format('{0}/**/*.csproj', inputs.working_directory)) }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      # ===== Node.js Setup =====
+      - name: Setup Node.js
+        if: '!inputs.skip_tests && inputs.technology == ''node'''
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.technology_version || '20' }}
+          cache: 'npm'
+          cache-dependency-path: ${{ inputs.working_directory }}/package-lock.json
+
+      # ===== Run Tests =====
+      - name: Test (.NET)
+        id: test-dotnet
+        if: '!inputs.skip_tests && inputs.technology == ''dotnet'''
+        working-directory: ${{ inputs.working_directory }}
+        run: |
+          echo "📦 Restoring dependencies..."
+          dotnet restore
+          echo "🧪 Running tests..."
+          dotnet test --no-restore --verbosity normal ${{ inputs.test_args }} \
+            --logger "trx;LogFileName=test-results.trx" \
+            || TEST_FAILED=true
+          
+          if [ "$TEST_FAILED" = "true" ]; then
+            echo "tests_passed=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          echo "tests_passed=true" >> $GITHUB_OUTPUT
+
+      - name: Test (Node.js)
+        id: test-node
+        if: '!inputs.skip_tests && inputs.technology == ''node'''
+        working-directory: ${{ inputs.working_directory }}
+        run: |
+          echo "📦 Installing dependencies..."
+          npm ci
+          echo "🧪 Running tests..."
+          npm test ${{ inputs.test_args }} || TEST_FAILED=true
+          
+          if [ "$TEST_FAILED" = "true" ]; then
+            echo "tests_passed=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          echo "tests_passed=true" >> $GITHUB_OUTPUT
+
+      # ===== Results =====
+      - name: Set test result
+        id: result
+        if: always()
+        run: |
+          if [ "${{ inputs.skip_tests }}" = "true" ]; then
+            echo "tests_passed=true" >> $GITHUB_OUTPUT
+            echo "coverage_report_path=" >> $GITHUB_OUTPUT
+          elif [ "${{ inputs.technology }}" = "dotnet" ]; then
+            echo "tests_passed=${{ steps.test-dotnet.outputs.tests_passed || 'false' }}" >> $GITHUB_OUTPUT
+            echo "coverage_report_path=${{ inputs.working_directory }}/TestResults" >> $GITHUB_OUTPUT
+          else
+            echo "tests_passed=${{ steps.test-node.outputs.tests_passed || 'false' }}" >> $GITHUB_OUTPUT
+            echo "coverage_report_path=${{ inputs.working_directory }}/coverage" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Upload test results
+        if: '!inputs.skip_tests && always()'
+        uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: test-results-${{ inputs.technology }}-${{ github.sha }}
+          path: |
+            ${{ inputs.working_directory }}/**/TestResults/
+            ${{ inputs.working_directory }}/coverage/
+          retention-days: 7

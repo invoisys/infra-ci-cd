@@ -1,0 +1,149 @@
+# Composite Build Workflow
+# Technology-agnostic build workflow supporting .NET and Node.js
+
+name: Build
+
+on:
+  workflow_call:
+    inputs:
+      technology:
+        description: 'Technology: dotnet or node'
+        required: false
+        type: string
+        default: 'dotnet'
+      technology_version:
+        description: 'SDK version (e.g., 8.0 for .NET, 20 for Node)'
+        required: false
+        type: string
+        default: ''
+      working_directory:
+        description: 'Source code directory'
+        required: false
+        type: string
+        default: 'src'
+      project_name:
+        description: 'Project name (for .NET .csproj)'
+        required: false
+        type: string
+        default: ''
+      build_args:
+        description: 'Additional build arguments'
+        required: false
+        type: string
+        default: ''
+    outputs:
+      artifact_path:
+        description: 'Path to build artifacts'
+        value: ${{ jobs.build.outputs.artifact_path }}
+      artifact_name:
+        description: 'Artifact name for download'
+        value: ${{ jobs.build.outputs.artifact_name }}
+      build_success:
+        description: 'Whether build completed successfully'
+        value: ${{ jobs.build.outputs.build_success }}
+
+jobs:
+  build:
+    name: Build (${{ inputs.technology }})
+    runs-on: ubuntu-latest
+    outputs:
+      artifact_path: ${{ steps.upload.outputs.artifact_path }}
+      artifact_name: ${{ steps.upload.outputs.artifact_name }}
+      build_success: ${{ steps.build.outputs.success }}
+
+    steps:
+      - name: Validate technology
+        run: |
+          TECH="${{ inputs.technology }}"
+          case "$TECH" in
+            dotnet|node) echo "✅ Technology: $TECH" ;;
+            *) echo "❌ Unknown technology: $TECH. Supported: dotnet, node" && exit 1 ;;
+          esac
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ===== .NET Setup =====
+      - name: Setup .NET
+        if: inputs.technology == 'dotnet'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ inputs.technology_version || '8.0' }}
+
+      - name: Cache NuGet
+        if: inputs.technology == 'dotnet'
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles(format('{0}/**/*.csproj', inputs.working_directory)) }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      # ===== Node.js Setup =====
+      - name: Setup Node.js
+        if: inputs.technology == 'node'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.technology_version || '20' }}
+          cache: 'npm'
+          cache-dependency-path: ${{ inputs.working_directory }}/package-lock.json
+
+      # ===== Build =====
+      - name: Build (.NET)
+        id: build-dotnet
+        if: inputs.technology == 'dotnet'
+        working-directory: ${{ inputs.working_directory }}
+        run: |
+          echo "📦 Restoring dependencies..."
+          dotnet restore
+          echo "🔨 Building..."
+          dotnet build --no-restore --configuration Release ${{ inputs.build_args }}
+          echo "success=true" >> $GITHUB_OUTPUT
+
+      - name: Build (Node.js)
+        id: build-node
+        if: inputs.technology == 'node'
+        working-directory: ${{ inputs.working_directory }}
+        run: |
+          echo "📦 Installing dependencies..."
+          npm ci
+          echo "🔨 Building..."
+          npm run build ${{ inputs.build_args }}
+          echo "success=true" >> $GITHUB_OUTPUT
+
+      - name: Set build success
+        id: build
+        run: |
+          if [ "${{ inputs.technology }}" = "dotnet" ]; then
+            echo "success=${{ steps.build-dotnet.outputs.success || 'false' }}" >> $GITHUB_OUTPUT
+          else
+            echo "success=${{ steps.build-node.outputs.success || 'false' }}" >> $GITHUB_OUTPUT
+          fi
+
+      # ===== Upload Artifacts =====
+      - name: Prepare artifacts (.NET)
+        if: inputs.technology == 'dotnet'
+        id: prepare-dotnet
+        run: |
+          ARTIFACT_PATH="${{ inputs.working_directory }}"
+          echo "artifact_path=${ARTIFACT_PATH}" >> $GITHUB_OUTPUT
+
+      - name: Prepare artifacts (Node.js)
+        if: inputs.technology == 'node'
+        id: prepare-node
+        run: |
+          ARTIFACT_PATH="${{ inputs.working_directory }}"
+          echo "artifact_path=${ARTIFACT_PATH}" >> $GITHUB_OUTPUT
+
+      - name: Upload build artifacts
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ inputs.technology }}-${{ github.sha }}
+          path: ${{ inputs.working_directory }}
+          retention-days: 1
+
+      - name: Set outputs
+        run: |
+          echo "artifact_path=${{ inputs.working_directory }}" >> $GITHUB_OUTPUT
+          echo "artifact_name=build-${{ inputs.technology }}-${{ github.sha }}" >> $GITHUB_OUTPUT

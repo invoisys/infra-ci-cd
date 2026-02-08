@@ -1,0 +1,84 @@
+# Validate Inputs Action
+# Validates common inputs for pipeline workflows
+
+name: Validate Inputs
+description: Validates technology, environment, and service_type inputs
+
+inputs:
+  technology:
+    description: 'Technology to validate (dotnet, node)'
+    required: false
+    default: ''
+  environment:
+    description: 'Environment to validate (dev, qa, sbx, prd)'
+    required: false
+    default: ''
+  service_type:
+    description: 'Service type to validate (api, worker)'
+    required: false
+    default: ''
+
+outputs:
+  valid:
+    description: 'Whether all inputs are valid'
+    value: ${{ steps.validate.outputs.valid }}
+  error_message:
+    description: 'Error message if validation failed'
+    value: ${{ steps.validate.outputs.error_message }}
+
+runs:
+  using: composite
+  steps:
+    - name: Validate inputs
+      id: validate
+      shell: bash
+      run: |
+        ERRORS=""
+        
+        # Validate technology
+        if [ -n "${{ inputs.technology }}" ]; then
+          case "${{ inputs.technology }}" in
+            dotnet|node)
+              echo "✅ Technology: ${{ inputs.technology }}"
+              ;;
+            *)
+              ERRORS="${ERRORS}Unknown technology: ${{ inputs.technology }}. Supported: dotnet, node\n"
+              ;;
+          esac
+        fi
+        
+        # Validate environment
+        if [ -n "${{ inputs.environment }}" ]; then
+          case "${{ inputs.environment }}" in
+            dev|qa|sbx|prd)
+              echo "✅ Environment: ${{ inputs.environment }}"
+              ;;
+            *)
+              ERRORS="${ERRORS}Invalid environment: ${{ inputs.environment }}. Supported: dev, qa, sbx, prd\n"
+              ;;
+          esac
+        fi
+        
+        # Validate service_type
+        if [ -n "${{ inputs.service_type }}" ]; then
+          case "${{ inputs.service_type }}" in
+            api|worker)
+              echo "✅ Service type: ${{ inputs.service_type }}"
+              ;;
+            *)
+              ERRORS="${ERRORS}Invalid service_type: ${{ inputs.service_type }}. Supported: api, worker\n"
+              ;;
+          esac
+        fi
+        
+        # Output results
+        if [ -n "$ERRORS" ]; then
+          echo "❌ Validation failed:"
+          echo -e "$ERRORS"
+          echo "valid=false" >> $GITHUB_OUTPUT
+          echo "error_message=${ERRORS}" >> $GITHUB_OUTPUT
+          exit 1
+        else
+          echo "valid=true" >> $GITHUB_OUTPUT
+          echo "error_message=" >> $GITHUB_OUTPUT
+        fi

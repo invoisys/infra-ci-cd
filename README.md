@@ -512,13 +512,31 @@ aws ecr describe-images --repository-name REPO --query 'imageDetails[*].[imageTa
 
 ## 📚 Documentação Adicional
 
+### Operacional
 | Documento | Descrição |
 |-----------|-----------|
 | [ENVIRONMENTS.md](.github/ENVIRONMENTS.md) | Configuração de environments e secrets |
-| [VERSIONING.md](.github/VERSIONING.md) | Estratégia de tags e histórico |
 | [ROLLBACK-PLAYBOOK.md](.github/ROLLBACK-PLAYBOOK.md) | Guia completo de rollback |
 | [build/README.md](build/README.md) | Documentação dos Dockerfiles |
-| [example/README.md](example/README.md) | Guia dos projetos de exemplo |
+
+### Técnico
+| Documento | Descrição |
+|-----------|-----------|
+| [COMPOSITES.md](.github/workflows/COMPOSITES.md) | Arquitetura de workflows compostos |
+| [VERSIONING.md](.github/VERSIONING.md) | Estratégia de tags e histórico |
+| [orchestrator.yml](.github/workflows/orchestrator.yml) | Workflow orquestrador |
+
+### Interno (Desenvolvimento)
+| Documento | Descrição |
+|-----------|-----------|
+| [.specs/project/STATE.md](.specs/project/STATE.md) | Estado atual e decisões recentes |
+| [.specs/project/ROADMAP.md](.specs/project/ROADMAP.md) | Roadmap de features |
+| [.specs/features/](specs/features/) | Especificações de features |
+
+### Exemplos
+| Documento | Descrição |
+|-----------|-----------|
+| [exemplo-uso-pipeline/](../exemplo-uso-pipeline/) | Exemplo de consumo do pipeline |
 
 ---
 

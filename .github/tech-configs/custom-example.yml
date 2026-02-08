@@ -1,0 +1,204 @@
+# ==============================================================================
+# Custom Technology Configuration Template
+# ==============================================================================
+#
+# Este arquivo serve como exemplo e template para adicionar suporte a novas
+# tecnologias nos workflows compostos.
+#
+# COMO USAR:
+# 1. Copie este arquivo para `.github/tech-configs/{sua-tecnologia}.yml`
+# 2. Substitua os valores de exemplo pelos da sua tecnologia
+# 3. Atualize os workflows build.yml e test.yml para reconhecer a nova tecnologia
+#
+# SCHEMA:
+# - name: Identificador único da tecnologia (usado no input `technology`)
+# - default_version: Versão padrão quando não especificada
+# - setup_action: GitHub Action para configurar o ambiente
+# - setup_with: Parâmetros para a setup action
+# - cache: Configuração de cache para dependências
+# - commands: Comandos para build/test/etc
+# - file_patterns: Padrões de arquivos para descoberta
+# - docker_build_args: Argumentos para build de Docker (opcional)
+#
+# ==============================================================================
+
+# Nome da tecnologia - este valor é usado no input `technology` dos workflows
+# Exemplo de uso: `technology: custom-example`
+name: custom-example
+
+# Versão padrão quando `technology_version` não é especificado
+# Dica: Use a versão LTS mais recente da sua tecnologia
+default_version: "1.0"
+
+# ==============================================================================
+# SDK/Runtime Setup
+# ==============================================================================
+# GitHub Action que configura o ambiente de desenvolvimento
+# Exemplos comuns:
+# - actions/setup-dotnet@v4 (para .NET)
+# - actions/setup-node@v4 (para Node.js)
+# - actions/setup-python@v5 (para Python)
+# - actions/setup-go@v5 (para Go)
+# - actions/setup-java@v4 (para Java)
+setup_action: actions/setup-custom@v1
+
+# Parâmetros para a setup action
+# Consulte a documentação da action para ver os parâmetros disponíveis
+# O valor `${{ inputs.technology_version || 'X.Y' }}` permite override via input
+setup_with:
+  version: ${{ inputs.technology_version || '1.0' }}
+  # Exemplos de outros parâmetros comuns:
+  # architecture: x64
+  # check-latest: true
+  # cache: true
+
+# ==============================================================================
+# Cache Configuration
+# ==============================================================================
+# Configuração para cache de dependências
+# Um bom cache pode reduzir o tempo de build em 50% ou mais
+cache:
+  # Diretório(s) que devem ser cacheados
+  # Exemplos:
+  # - ~/.nuget/packages (NuGet/.NET)
+  # - ~/.npm (npm/Node.js)
+  # - ~/.cache/pip (pip/Python)
+  # - ~/go/pkg/mod (Go modules)
+  # - ~/.m2/repository (Maven/Java)
+  path: ~/.custom-cache
+  
+  # Padrão para chave do cache
+  # Use hashFiles() para invalidar quando dependências mudam
+  # IMPORTANTE: A chave deve mudar quando as dependências mudam
+  key_pattern: "${{ runner.os }}-custom-${{ hashFiles('**/custom.lock') }}"
+  
+  # Chaves de fallback para restauração parcial
+  # Usadas quando a chave exata não é encontrada
+  restore_keys: |
+    ${{ runner.os }}-custom-
+
+# ==============================================================================
+# Build/Test Commands
+# ==============================================================================
+# Comandos executados em cada fase do pipeline
+# IMPORTANTE: Estes são comandos de exemplo - substitua pelos da sua tecnologia
+commands:
+  # Instalação/restauração de dependências
+  # Executado antes do build e teste
+  # Exemplos:
+  # - dotnet restore
+  # - npm ci
+  # - pip install -r requirements.txt
+  # - go mod download
+  restore: custom install --frozen-lockfile
+  
+  # Compilação do projeto
+  # Deve gerar artefatos prontos para deploy
+  # Exemplos:
+  # - dotnet build --configuration Release
+  # - npm run build
+  # - go build -o ./bin/app
+  build: custom build --release --output ./dist
+  
+  # Execução de testes
+  # Deve incluir geração de relatórios se disponível
+  # Exemplos:
+  # - dotnet test --logger "trx;LogFileName=test-results.trx"
+  # - npm test -- --coverage
+  # - go test -v ./...
+  test: custom test --coverage --reporter=junit
+  
+  # (Opcional) Linting/análise estática
+  # lint: custom lint --fix
+  
+  # (Opcional) Publicação de artefatos
+  # publish: custom publish --output ./publish
+
+# ==============================================================================
+# File Patterns
+# ==============================================================================
+# Padrões glob para identificar arquivos relevantes da tecnologia
+# Usados para descoberta automática e validação
+file_patterns:
+  # Arquivo de configuração principal do projeto
+  # Exemplos:
+  # - **/*.csproj (.NET)
+  # - **/package.json (Node.js)
+  # - **/requirements.txt (Python)
+  # - **/go.mod (Go)
+  project: "**/custom.config"
+  
+  # Arquivo de lock de dependências (para cache key)
+  # Exemplos:
+  # - **/packages.lock.json (.NET)
+  # - **/package-lock.json (Node.js)
+  # - **/Pipfile.lock (Python/Pipenv)
+  # - **/go.sum (Go)
+  lock_file: "**/custom.lock"
+  
+  # (Opcional) Arquivos ou diretórios de teste
+  # test_config: "**/custom.test.config"
+  # test_files: "**/*_test.custom"
+
+# ==============================================================================
+# Docker Build Arguments (Opcional)
+# ==============================================================================
+# Argumentos passados para o docker build via --build-arg
+# Usados quando a imagem Docker precisa de configuração específica
+docker_build_args:
+  - name: CUSTOM_VERSION
+    description: "Versão do runtime Custom para a imagem Docker"
+    required: false
+    default: "1.0"
+  
+  # Exemplo para .NET:
+  # - name: PROJECT_NAME
+  #   description: "Nome do projeto .csproj"
+  #   required: true
+  
+  # Exemplo para Node.js:
+  # - name: NODE_ENV
+  #   description: "Ambiente Node (production/development)"
+  #   default: "production"
+
+# ==============================================================================
+# PRÓXIMOS PASSOS PARA IMPLEMENTAR
+# ==============================================================================
+#
+# 1. CRIAR O ARQUIVO DE CONFIGURAÇÃO
+#    Copie este arquivo e ajuste para sua tecnologia
+#
+# 2. ATUALIZAR build.yml
+#    Adicione um bloco condicional para sua tecnologia:
+#
+#    ```yaml
+#    - name: Setup Custom
+#      if: inputs.technology == 'custom-example'
+#      uses: actions/setup-custom@v1
+#      with:
+#        version: ${{ inputs.technology_version || '1.0' }}
+#
+#    - name: Build (Custom)
+#      if: inputs.technology == 'custom-example'
+#      run: |
+#        custom install --frozen-lockfile
+#        custom build --release
+#    ```
+#
+# 3. ATUALIZAR test.yml
+#    Adicione bloco similar para execução de testes
+#
+# 4. ATUALIZAR VALIDAÇÃO
+#    No step "Validate technology", adicione a nova tecnologia:
+#
+#    ```yaml
+#    case "$TECH" in
+#      dotnet|node|custom-example) echo "✅ Technology: $TECH" ;;
+#      *) echo "❌ Unknown technology" && exit 1 ;;
+#    esac
+#    ```
+#
+# 5. DOCUMENTAR
+#    Atualize o README com a nova tecnologia suportada
+#
+# ==============================================================================

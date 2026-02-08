@@ -1,0 +1,215 @@
+# Composite Docker Workflow
+# Build Docker image and push to ECR
+
+name: Docker
+
+on:
+  workflow_call:
+    inputs:
+      ecr_repo:
+        description: 'ECR repository name'
+        required: true
+        type: string
+      service_type:
+        description: 'Service type: api or worker'
+        required: true
+        type: string
+      push:
+        description: 'Push to ECR'
+        required: false
+        type: boolean
+        default: true
+      dockerfile_path:
+        description: 'Path to Dockerfile'
+        required: false
+        type: string
+        default: ''
+      use_template_dockerfile:
+        description: 'Use Dockerfile from templates repo'
+        required: false
+        type: boolean
+        default: true
+      templates_repo:
+        description: 'Templates repository'
+        required: false
+        type: string
+        default: ''
+      templates_ref:
+        description: 'Templates repo branch/tag'
+        required: false
+        type: string
+        default: 'main'
+      project_name:
+        description: 'Project name (for .NET build arg)'
+        required: false
+        type: string
+        default: ''
+      aws_region:
+        description: 'AWS region'
+        required: false
+        type: string
+        default: 'us-east-1'
+      ecr_registry:
+        description: 'ECR registry URL (optional, auto-detected)'
+        required: false
+        type: string
+        default: ''
+      image_tags:
+        description: 'Additional image tags (comma-separated)'
+        required: false
+        type: string
+        default: ''
+    secrets:
+      AWS_ACCESS_KEY_ID:
+        required: true
+      AWS_SECRET_ACCESS_KEY:
+        required: true
+      REPO_ACCESS_TOKEN:
+        required: false
+    outputs:
+      image_digest:
+        description: 'Image digest'
+        value: ${{ jobs.docker.outputs.image_digest }}
+      image_tag:
+        description: 'Primary image tag (SHA)'
+        value: ${{ jobs.docker.outputs.image_tag }}
+      full_image_uri:
+        description: 'Full image URI in ECR'
+        value: ${{ jobs.docker.outputs.full_image_uri }}
+      registry:
+        description: 'ECR registry used'
+        value: ${{ jobs.docker.outputs.registry }}
+
+jobs:
+  docker:
+    name: Docker Build & Push
+    runs-on: ubuntu-latest
+    outputs:
+      image_digest: ${{ steps.push.outputs.image_digest }}
+      image_tag: ${{ steps.push.outputs.image_tag }}
+      full_image_uri: ${{ steps.push.outputs.full_image_uri }}
+      registry: ${{ steps.push.outputs.registry }}
+
+    steps:
+      - name: Validate inputs
+        run: |
+          [ -z "${{ inputs.ecr_repo }}" ] && echo "❌ ecr_repo is required" && exit 1
+          case "${{ inputs.service_type }}" in
+            api|worker) echo "✅ Service type: ${{ inputs.service_type }}" ;;
+            *) echo "❌ Invalid service_type: ${{ inputs.service_type }}. Must be: api, worker" && exit 1 ;;
+          esac
+
+      - name: Checkout application
+        uses: actions/checkout@v4
+
+      - name: Checkout templates
+        if: inputs.use_template_dockerfile && inputs.templates_repo != ''
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.templates_repo }}
+          ref: ${{ inputs.templates_ref }}
+          path: .ci-templates
+          token: ${{ secrets.REPO_ACCESS_TOKEN || github.token }}
+
+      - name: Determine Dockerfile path
+        id: dockerfile
+        run: |
+          if [ "${{ inputs.use_template_dockerfile }}" = "true" ] && [ -n "${{ inputs.templates_repo }}" ]; then
+            DF=".ci-templates/build/Dockerfile.${{ inputs.service_type }}"
+          else
+            DF="${{ inputs.dockerfile_path }}"
+            [ -z "$DF" ] && DF="Dockerfile.${{ inputs.service_type }}"
+          fi
+          
+          if [ ! -f "$DF" ]; then
+            echo "❌ Dockerfile not found at: $DF"
+            exit 1
+          fi
+          
+          echo "✅ Dockerfile: $DF"
+          echo "path=$DF" >> $GITHUB_OUTPUT
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ inputs.aws_region }}
+
+      - name: Login to ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build Docker image
+        id: build
+        env:
+          REGISTRY: ${{ inputs.ecr_registry || steps.login-ecr.outputs.registry }}
+          ECR_REPO: ${{ inputs.ecr_repo }}
+        run: |
+          [ -z "$REGISTRY" ] && echo "❌ Registry is empty" && exit 1
+          
+          IMG="${REGISTRY}/${ECR_REPO}"
+          echo "🐳 Building image: $IMG"
+          
+          BUILD_ARGS=""
+          [ -n "${{ inputs.project_name }}" ] && BUILD_ARGS="--build-arg PROJECT_NAME=${{ inputs.project_name }}"
+          
+          docker build -t ci-build -f ${{ steps.dockerfile.outputs.path }} $BUILD_ARGS .
+          
+          echo "image_base=$IMG" >> $GITHUB_OUTPUT
+          echo "registry=$REGISTRY" >> $GITHUB_OUTPUT
+
+      - name: Push to ECR
+        id: push
+        if: inputs.push
+        env:
+          IMG_BASE: ${{ steps.build.outputs.image_base }}
+          REGISTRY: ${{ steps.build.outputs.registry }}
+        run: |
+          echo "📤 Pushing to ECR..."
+          
+          # Tag with SHA
+          docker tag ci-build "${IMG_BASE}:${{ github.sha }}"
+          docker push "${IMG_BASE}:${{ github.sha }}"
+          
+          # Tag with branch
+          docker tag ci-build "${IMG_BASE}:${{ github.ref_name }}"
+          docker push "${IMG_BASE}:${{ github.ref_name }}"
+          
+          # Tag with timestamp
+          TS="$(date -u +%Y%m%d-%H%M%S)"
+          docker tag ci-build "${IMG_BASE}:${TS}"
+          docker push "${IMG_BASE}:${TS}"
+          
+          # Additional tags
+          if [ -n "${{ inputs.image_tags }}" ]; then
+            IFS=',' read -ra TAGS <<< "${{ inputs.image_tags }}"
+            for tag in "${TAGS[@]}"; do
+              tag=$(echo "$tag" | xargs)  # trim whitespace
+              docker tag ci-build "${IMG_BASE}:${tag}"
+              docker push "${IMG_BASE}:${tag}"
+            done
+          fi
+          
+          # Get digest
+          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' ci-build | cut -d'@' -f2)
+          
+          echo "image_digest=${DIGEST}" >> $GITHUB_OUTPUT
+          echo "image_tag=${{ github.sha }}" >> $GITHUB_OUTPUT
+          echo "full_image_uri=${IMG_BASE}:${{ github.sha }}" >> $GITHUB_OUTPUT
+          echo "registry=${REGISTRY}" >> $GITHUB_OUTPUT
+          
+          echo "✅ Pushed: ${IMG_BASE}:${{ github.sha }}"
+
+      - name: Output for dry-run (no push)
+        id: no-push
+        if: '!inputs.push'
+        env:
+          IMG_BASE: ${{ steps.build.outputs.image_base }}
+          REGISTRY: ${{ steps.build.outputs.registry }}
+        run: |
+          echo "🔍 Dry-run mode (push=false)"
+          echo "image_digest=" >> $GITHUB_OUTPUT
+          echo "image_tag=${{ github.sha }}" >> $GITHUB_OUTPUT
+          echo "full_image_uri=${IMG_BASE}:${{ github.sha }}" >> $GITHUB_OUTPUT
+          echo "registry=${REGISTRY}" >> $GITHUB_OUTPUT

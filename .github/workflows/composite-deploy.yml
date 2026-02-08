@@ -1,294 +1,277 @@
-name: Reusable ECS Pipeline
+# Composite Deploy Workflow
+# Deploy Docker image to ECS Fargate
+
+name: Deploy
 
 on:
   workflow_call:
     inputs:
+      # Required inputs
+      image_uri:
+        description: 'Full image URI in ECR'
+        required: true
+        type: string
       ecs_service:
-        description: 'Nome do service ECS e da task definition family'
+        description: 'ECS service name'
+        required: true
+        type: string
+      environment:
+        description: 'Environment (dev|qa|sbx|prd)'
         required: true
         type: string
       service_type:
-        description: 'Tipo de serviço: api ou worker'
+        description: 'Service type: api or worker'
         required: true
         type: string
-      ecr_repo:
-        description: 'Nome do repositório ECR'
-        required: true
-        type: string
-      ecr_registry:
-        description: 'URL do registry ECR'
-        required: false
-        type: string
-        default: ''
-      environment:
-        description: 'Ambiente (dev|qa|sbx|prd)'
-        required: true
-        type: string
-      use_default_dockerfile:
-        description: 'true = Dockerfile do repo de templates'
-        required: false
-        type: boolean
-        default: true
-      templates_repo:
-        description: 'Repo dos templates'
-        required: false
-        type: string
-        default: ''
-      templates_ref:
-        description: 'Branch/tag do repo de templates'
-        required: false
-        type: string
-        default: 'main'
-      project_name:
-        description: 'Nome do projeto .csproj'
-        required: false
-        type: string
-        default: ''
-      dotnet_version:
-        description: 'Versão do .NET SDK'
-        required: false
-        type: string
-        default: '8.0'
-      working_directory:
-        description: 'Diretório do código fonte'
-        required: false
-        type: string
-        default: 'src'
-      dockerfile_path:
-        description: 'Caminho do Dockerfile'
-        required: false
-        type: string
-        default: ''
+      
+      # AWS & ECS Configuration
       aws_region:
-        description: 'Região AWS'
+        description: 'AWS region'
         required: false
         type: string
         default: 'us-east-1'
       ecs_cluster:
-        description: 'Nome do cluster ECS'
+        description: 'ECS cluster name'
         required: false
         type: string
         default: ''
       ecs_task_execution_role_arn:
-        description: 'ARN da role de execução da task'
+        description: 'Task execution role ARN'
         required: false
         type: string
         default: ''
       ecs_task_role_arn:
-        description: 'ARN da role da task'
+        description: 'Task role ARN'
         required: false
         type: string
         default: ''
+      
+      # Task Definition
       task_cpu:
-        description: 'CPU para Fargate (256, 512, 1024, 2048, 4096)'
+        description: 'CPU units (256, 512, 1024, 2048, 4096)'
         required: false
         type: string
         default: '256'
       task_memory:
-        description: 'Memória em MB para Fargate'
+        description: 'Memory in MB'
         required: false
         type: string
         default: '512'
-      subnet_ids:
-        description: 'IDs das subnets separados por vírgula'
-        required: false
-        type: string
-        default: ''
-      security_group_ids:
-        description: 'IDs dos security groups separados por vírgula'
-        required: false
-        type: string
-        default: ''
-      assign_public_ip:
-        description: 'Atribuir IP público (ENABLED/DISABLED)'
-        required: false
-        type: string
-        default: 'DISABLED'
-      desired_count:
-        description: 'Número desejado de tasks'
-        required: false
-        type: string
-        default: '1'
-      create_target_group_and_listener:
-        description: 'Para API: obter ou criar target group e listener'
-        required: false
-        type: boolean
-        default: false
-      load_balancer_arn:
-        description: 'ARN do ALB'
-        required: false
-        type: string
-        default: ''
-      load_balancer_name:
-        description: 'Nome do ALB existente'
-        required: false
-        type: string
-        default: ''
-      listener_port:
-        description: 'Porta do listener'
-        required: false
-        type: string
-        default: '80'
-      listener_protocol:
-        description: 'Protocolo do listener (HTTP ou HTTPS)'
-        required: false
-        type: string
-        default: 'HTTP'
-      listener_certificate_arn:
-        description: 'ARN do certificado ACM'
-        required: false
-        type: string
-        default: ''
-      target_group_name:
-        description: 'Nome do target group'
-        required: false
-        type: string
-        default: ''
-      target_group_port:
-        description: 'Porta do target group'
-        required: false
-        type: string
-        default: '80'
-      target_group_protocol:
-        description: 'Protocolo do target group'
-        required: false
-        type: string
-        default: 'HTTP'
-      target_group_health_check_path:
-        description: 'Caminho do health check'
-        required: false
-        type: string
-        default: '/'
-      target_group_health_check_protocol:
-        description: 'Protocolo do health check'
-        required: false
-        type: string
-        default: 'HTTP'
-      target_group_deregistration_delay_seconds:
-        description: 'Deregistration delay em segundos'
-        required: false
-        type: string
-        default: '300'
-      listener_rule_path_pattern:
-        description: 'Path pattern para regra do listener'
-        required: false
-        type: string
-        default: ''
-      listener_rule_host_header:
-        description: 'Host header para regra do listener'
-        required: false
-        type: string
-        default: ''
-      listener_rule_priority:
-        description: 'Prioridade da regra do listener'
-        required: false
-        type: string
-        default: ''
       container_name:
-        description: 'Nome do container na task definition'
+        description: 'Container name'
         required: false
         type: string
         default: 'app'
       container_port:
-        description: 'Porta do container'
+        description: 'Container port'
         required: false
         type: string
         default: '80'
       container_environment:
-        description: 'JSON array de variáveis de ambiente'
+        description: 'JSON array of environment variables'
         required: false
         type: string
         default: ''
       container_secrets:
-        description: 'JSON array de secrets'
+        description: 'JSON array of secrets'
         required: false
         type: string
         default: ''
+      
+      # Runtime Platform
       runtime_cpu_architecture:
-        description: 'CPU da plataforma (X86_64, ARM64)'
+        description: 'CPU architecture (X86_64, ARM64)'
         required: false
         type: string
         default: ''
       runtime_os_family:
-        description: 'OS da plataforma (LINUX, WINDOWS_SERVER_2019_CORE)'
+        description: 'OS family (LINUX, WINDOWS_SERVER_2019_CORE)'
         required: false
         type: string
         default: ''
+      
+      # Logging
       awslogs_mode:
-        description: 'Modo awslogs (non-blocking ou blocking)'
+        description: 'awslogs mode (non-blocking, blocking)'
         required: false
         type: string
         default: ''
       awslogs_create_group:
-        description: 'Criar log group se não existir'
+        description: 'Create log group if not exists'
         required: false
         type: string
         default: ''
       awslogs_max_buffer_size:
-        description: 'Tamanho máximo do buffer'
+        description: 'Max buffer size'
         required: false
         type: string
         default: ''
       port_mapping_app_protocol:
-        description: 'appProtocol do portMapping'
+        description: 'App protocol for port mapping'
         required: false
         type: string
         default: ''
+      
+      # Network Configuration
+      subnet_ids:
+        description: 'Subnet IDs (comma-separated)'
+        required: false
+        type: string
+        default: ''
+      security_group_ids:
+        description: 'Security group IDs (comma-separated)'
+        required: false
+        type: string
+        default: ''
+      assign_public_ip:
+        description: 'Assign public IP (ENABLED/DISABLED)'
+        required: false
+        type: string
+        default: 'DISABLED'
+      
+      # Service Configuration
+      desired_count:
+        description: 'Desired task count'
+        required: false
+        type: string
+        default: '1'
+      
+      # Load Balancer (API only)
+      create_target_group_and_listener:
+        description: 'Create/use target group and listener'
+        required: false
+        type: boolean
+        default: false
+      load_balancer_arn:
+        description: 'ALB ARN'
+        required: false
+        type: string
+        default: ''
+      load_balancer_name:
+        description: 'ALB name'
+        required: false
+        type: string
+        default: ''
+      listener_port:
+        description: 'Listener port'
+        required: false
+        type: string
+        default: '80'
+      listener_protocol:
+        description: 'Listener protocol'
+        required: false
+        type: string
+        default: 'HTTP'
+      listener_certificate_arn:
+        description: 'ACM certificate ARN'
+        required: false
+        type: string
+        default: ''
+      target_group_name:
+        description: 'Target group name'
+        required: false
+        type: string
+        default: ''
+      target_group_port:
+        description: 'Target group port'
+        required: false
+        type: string
+        default: '80'
+      target_group_protocol:
+        description: 'Target group protocol'
+        required: false
+        type: string
+        default: 'HTTP'
+      target_group_health_check_path:
+        description: 'Health check path'
+        required: false
+        type: string
+        default: '/'
+      target_group_health_check_protocol:
+        description: 'Health check protocol'
+        required: false
+        type: string
+        default: 'HTTP'
+      target_group_deregistration_delay_seconds:
+        description: 'Deregistration delay'
+        required: false
+        type: string
+        default: '300'
+      listener_rule_path_pattern:
+        description: 'Listener rule path pattern'
+        required: false
+        type: string
+        default: ''
+      listener_rule_host_header:
+        description: 'Listener rule host header'
+        required: false
+        type: string
+        default: ''
+      listener_rule_priority:
+        description: 'Listener rule priority'
+        required: false
+        type: string
+        default: ''
+      
+      # Advanced Service Options
       enable_zone_rebalancing:
-        description: 'Ativar rebalanceamento de zonas'
+        description: 'Enable zone rebalancing'
         required: false
         type: boolean
         default: false
       health_check_grace_period_seconds:
-        description: 'Período de carência do health check'
+        description: 'Health check grace period'
         required: false
         type: string
         default: ''
       deployment_circuit_breaker_enable:
-        description: 'Habilitar disjuntor de implantação'
+        description: 'Enable deployment circuit breaker'
         required: false
         type: boolean
         default: false
       deployment_circuit_breaker_rollback:
-        description: 'Rollback automático quando disjuntor disparar'
+        description: 'Auto rollback on circuit breaker'
         required: false
         type: boolean
         default: false
       capacity_provider_strategy:
-        description: 'Estratégia de capacity providers'
+        description: 'Capacity provider strategy'
         required: false
         type: string
         default: ''
       platform_version:
-        description: 'Versão da plataforma Fargate'
+        description: 'Fargate platform version'
         required: false
         type: string
         default: ''
       enable_execute_command:
-        description: 'Ativar ECS Exec'
+        description: 'Enable ECS Exec'
         required: false
         type: boolean
         default: false
       deployment_minimum_healthy_percent:
-        description: 'Mínimo % de tarefas saudáveis'
+        description: 'Min healthy percent during deploy'
         required: false
         type: string
         default: ''
       deployment_maximum_percent:
-        description: 'Máximo % de tarefas durante deploy'
+        description: 'Max percent during deploy'
         required: false
         type: string
         default: ''
+      
+      # Health Check
       enable_health_check:
-        description: 'Executar health check HTTP pós-deploy'
+        description: 'Run HTTP health check post-deploy'
         required: false
         type: boolean
         default: false
       health_check_url:
-        description: 'URL do health check'
+        description: 'Health check URL'
         required: false
         type: string
         default: ''
+        
     secrets:
       AWS_ACCESS_KEY_ID:
         required: true
@@ -298,89 +281,46 @@ on:
         required: false
       ECS_TASK_EXECUTION_ROLE_ARN:
         required: false
-      REPO_ACCESS_TOKEN:
-        required: false
+        
     outputs:
-      image_digest:
-        description: 'Digest da imagem no ECR'
-        value: ${{ jobs.pipeline.outputs.image_digest }}
-      image_tag:
-        description: 'Tag da imagem (SHA)'
-        value: ${{ jobs.pipeline.outputs.image_tag }}
-      deployed_service_arn:
-        description: 'ARN do service ECS'
-        value: ${{ jobs.pipeline.outputs.deployed_service_arn }}
+      service_arn:
+        description: 'ECS service ARN'
+        value: ${{ jobs.deploy.outputs.service_arn }}
       task_definition_arn:
-        description: 'ARN da task definition registrada'
-        value: ${{ jobs.pipeline.outputs.task_definition_arn }}
+        description: 'Registered task definition ARN'
+        value: ${{ jobs.deploy.outputs.task_definition_arn }}
+      deploy_metadata_artifact:
+        description: 'Deploy metadata artifact name'
+        value: ${{ jobs.deploy.outputs.deploy_metadata_artifact }}
 
 jobs:
-  pipeline:
-    name: Build, Test, Docker, ECR, ECS
+  deploy:
+    name: Deploy to ECS
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
     outputs:
-      image_digest: ${{ steps.ecr-push.outputs.image_digest }}
-      image_tag: ${{ steps.ecr-push.outputs.image_tag }}
-      deployed_service_arn: ${{ steps.ecs-finalize.outputs.service_arn }}
+      service_arn: ${{ steps.finalize.outputs.service_arn }}
       task_definition_arn: ${{ steps.task-def.outputs.task_definition_arn }}
+      deploy_metadata_artifact: ${{ steps.metadata.outputs.artifact_name }}
 
     steps:
-      - name: Validar ambiente e service
-        id: validate
+      - name: Validate inputs
         run: |
-          ENV="${{ inputs.environment }}"
-          case "$ENV" in dev|qa|sbx|prd) echo "✅ Ambiente: $ENV" ;; *) echo "❌ Ambiente inválido"; exit 1 ;; esac
-          [ -z "${{ inputs.ecs_service }}" ] && echo "❌ ecs_service obrigatório" && exit 1
-          [ -z "${{ inputs.ecr_repo }}" ] && echo "❌ ecr_repo obrigatório" && exit 1
-          echo "ecr_repository=${{ inputs.ecr_repo }}" >> $GITHUB_OUTPUT
-          echo "ecs_service=${{ inputs.ecs_service }}" >> $GITHUB_OUTPUT
-
-      - name: Checkout aplicação
-        uses: actions/checkout@v4
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: ${{ inputs.dotnet_version }}
-
-      - name: Cache NuGet
-        uses: actions/cache@v4
-        with:
-          path: ~/.nuget/packages
-          key: ${{ runner.os }}-nuget-${{ hashFiles(format('{0}/**/*.csproj', inputs.working_directory)) }}
-
-      - name: Restore e Test
-        working-directory: ${{ inputs.working_directory }}
-        run: |
-          dotnet restore
-          dotnet test --no-restore --verbosity normal
-
-      - name: Checkout templates
-        if: inputs.use_default_dockerfile && inputs.templates_repo != ''
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ inputs.templates_repo }}
-          ref: ${{ inputs.templates_ref }}
-          path: .ci-templates
-          token: ${{ secrets.REPO_ACCESS_TOKEN || secrets.GITHUB_TOKEN }}
-
-      - name: Definir Dockerfile
-        id: dockerfile-path
-        run: |
-          if [ "${{ inputs.use_default_dockerfile }}" = "true" ] && [ -n "${{ inputs.templates_repo }}" ]; then
-            echo "dockerfile=.ci-templates/build/Dockerfile.${{ inputs.service_type }}" >> $GITHUB_OUTPUT
-          else
-            DF="${{ inputs.dockerfile_path }}"
-            [ -z "$DF" ] && DF="Dockerfile.${{ inputs.service_type }}"
-            echo "dockerfile=${DF}" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Build Docker
-        run: |
-          ARGS=""
-          [ -n "${{ inputs.project_name }}" ] && ARGS="--build-arg PROJECT_NAME=${{ inputs.project_name }}"
-          docker build -t ci-build -f ${{ steps.dockerfile-path.outputs.dockerfile }} $ARGS .
+          # Validate environment
+          case "${{ inputs.environment }}" in
+            dev|qa|sbx|prd) echo "✅ Environment: ${{ inputs.environment }}" ;;
+            *) echo "❌ Invalid environment: ${{ inputs.environment }}" && exit 1 ;;
+          esac
+          
+          # Validate service_type
+          case "${{ inputs.service_type }}" in
+            api|worker) echo "✅ Service type: ${{ inputs.service_type }}" ;;
+            *) echo "❌ Invalid service_type: ${{ inputs.service_type }}" && exit 1 ;;
+          esac
+          
+          # Validate required inputs
+          [ -z "${{ inputs.image_uri }}" ] && echo "❌ image_uri is required" && exit 1
+          [ -z "${{ inputs.ecs_service }}" ] && echo "❌ ecs_service is required" && exit 1
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -389,40 +329,12 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ inputs.aws_region }}
 
-      - name: Login to ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Push to ECR
-        id: ecr-push
-        env:
-          REGISTRY: ${{ inputs.ecr_registry || steps.login-ecr.outputs.registry }}
-          ECR_REPO: ${{ steps.validate.outputs.ecr_repository }}
-        run: |
-          [ -z "$REGISTRY" ] && echo "❌ Registry vazio" && exit 1
-          IMG="${REGISTRY}/${ECR_REPO}"
-          docker tag ci-build "${IMG}:${{ github.sha }}"
-          docker push "${IMG}:${{ github.sha }}"
-          docker tag ci-build "${IMG}:${{ github.ref_name }}"
-          docker push "${IMG}:${{ github.ref_name }}"
-          TS="$(date -u +%Y%m%d-%H%M%S)"
-          docker tag ci-build "${IMG}:${TS}"
-          docker push "${IMG}:${TS}"
-          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' ci-build | cut -d'@' -f2)
-          echo "image_digest=${DIGEST}" >> $GITHUB_OUTPUT
-          echo "image_tag=${{ github.sha }}" >> $GITHUB_OUTPUT
-          echo "registry=${REGISTRY}" >> $GITHUB_OUTPUT
-          echo "✅ Pushed ${IMG}:${{ github.sha }}"
-
-      # ========== TASK DEFINITION ==========
-      - name: Registrar Task Definition
+      - name: Register Task Definition
         id: task-def
         env:
           CLUSTER: ${{ inputs.ecs_cluster || secrets.ECS_CLUSTER }}
-          SERVICE: ${{ steps.validate.outputs.ecs_service }}
-          REGISTRY: ${{ steps.ecr-push.outputs.registry }}
-          ECR_REPO: ${{ steps.validate.outputs.ecr_repository }}
-          IMAGE_TAG: ${{ steps.ecr-push.outputs.image_tag }}
+          SERVICE: ${{ inputs.ecs_service }}
+          FULL_IMAGE: ${{ inputs.image_uri }}
           TASK_EXEC_ROLE: ${{ inputs.ecs_task_execution_role_arn || secrets.ECS_TASK_EXECUTION_ROLE_ARN }}
           TASK_ROLE: ${{ inputs.ecs_task_role_arn }}
           CONTAINER_NAME: ${{ inputs.container_name || 'app' }}
@@ -440,26 +352,27 @@ jobs:
           PORT_APP_PROTOCOL: ${{ inputs.port_mapping_app_protocol }}
         run: |
           set -e
-          FULL_IMAGE="${REGISTRY}/${ECR_REPO}:${IMAGE_TAG}"
-          echo "🖼️ Imagem: $FULL_IMAGE"
+          echo "🖼️ Image: $FULL_IMAGE"
           
+          # Check if service exists
           EXISTING=$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" --query 'services[?status==`ACTIVE`]' --output json)
           SERVICE_EXISTS=$(echo "$EXISTING" | jq 'length > 0')
           echo "service_exists=${SERVICE_EXISTS}" >> $GITHUB_OUTPUT
           
           if [ "$SERVICE_EXISTS" = "true" ]; then
-            echo "🔄 Service existe: reutilizando task definition..."
+            echo "🔄 Service exists: reusing task definition..."
             CURRENT_TASK_ARN=$(echo "$EXISTING" | jq -r '.[0].taskDefinition')
             TASK_DEF_JSON=$(aws ecs describe-task-definition --task-definition "$CURRENT_TASK_ARN" --query 'taskDefinition' --output json)
             TASK_DEF_JSON=$(echo "$TASK_DEF_JSON" | jq 'del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy)')
             TASK_DEF_JSON=$(echo "$TASK_DEF_JSON" | jq --arg img "$FULL_IMAGE" '.containerDefinitions[0].image = $img')
+            
             if [ -n "$CONTAINER_ENVIRONMENT" ] && [ "$CONTAINER_ENVIRONMENT" != "[]" ]; then
               echo "$CONTAINER_ENVIRONMENT" | jq -e . >/dev/null 2>&1 && \
               TASK_DEF_JSON=$(echo "$TASK_DEF_JSON" | jq --argjson env "$CONTAINER_ENVIRONMENT" '.containerDefinitions[0].environment = $env')
             fi
           else
-            echo "🆕 Service não existe: criando task definition do zero..."
-            [ -z "$TASK_EXEC_ROLE" ] && echo "❌ Role obrigatória" && exit 1
+            echo "🆕 Service does not exist: creating task definition from scratch..."
+            [ -z "$TASK_EXEC_ROLE" ] && echo "❌ Execution role is required for new services" && exit 1
             
             PORT_NUM=$(echo "$CONTAINER_PORT" | grep -E '^[0-9]+$' || echo "80")
             LOG_GROUP="/ecs/${SERVICE}"
@@ -469,23 +382,25 @@ jobs:
               '{name:$name,containerPort:$port,hostPort:$port,protocol:"tcp"}')
             [ -n "$PORT_APP_PROTOCOL" ] && PORT_MAPPING=$(echo "$PORT_MAPPING" | jq --arg p "$PORT_APP_PROTOCOL" '.+{appProtocol:$p}')
             
-            # Log opts
+            # Log options
             LOG_OPTS=$(jq -n --arg lg "$LOG_GROUP" --arg r "$AWS_REGION" '{"awslogs-group":$lg,"awslogs-region":$r,"awslogs-stream-prefix":"ecs"}')
             [ -n "$AWSLOGS_MODE" ] && LOG_OPTS=$(echo "$LOG_OPTS" | jq --arg m "$AWSLOGS_MODE" '.+{mode:$m}')
             [ -n "$AWSLOGS_CREATE_GROUP" ] && LOG_OPTS=$(echo "$LOG_OPTS" | jq --arg c "$AWSLOGS_CREATE_GROUP" '.+{"awslogs-create-group":$c}')
             [ -n "$AWSLOGS_MAX_BUFFER" ] && LOG_OPTS=$(echo "$LOG_OPTS" | jq --arg b "$AWSLOGS_MAX_BUFFER" '.+{"max-buffer-size":$b}')
             
-            # Container def
+            # Container definition
             CONTAINER_DEF=$(jq -n --arg n "$CONTAINER_NAME" --arg img "$FULL_IMAGE" --argjson pm "$PORT_MAPPING" --argjson lo "$LOG_OPTS" \
               '{name:$n,image:$img,portMappings:[$pm],logConfiguration:{logDriver:"awslogs",options:$lo},essential:true}')
+            
             [ -n "$CONTAINER_ENVIRONMENT" ] && [ "$CONTAINER_ENVIRONMENT" != "[]" ] && \
               echo "$CONTAINER_ENVIRONMENT" | jq -e . >/dev/null 2>&1 && \
               CONTAINER_DEF=$(echo "$CONTAINER_DEF" | jq --argjson e "$CONTAINER_ENVIRONMENT" '.+{environment:$e}')
+            
             [ -n "$CONTAINER_SECRETS" ] && [ "$CONTAINER_SECRETS" != "[]" ] && \
               echo "$CONTAINER_SECRETS" | jq -e . >/dev/null 2>&1 && \
               CONTAINER_DEF=$(echo "$CONTAINER_DEF" | jq --argjson s "$CONTAINER_SECRETS" '.+{secrets:$s}')
             
-            # Task def
+            # Task definition
             TASK_DEF_JSON=$(jq -n --arg f "$SERVICE" --arg er "$TASK_EXEC_ROLE" --arg cpu "$TASK_CPU" --arg mem "$TASK_MEMORY" --argjson c "$CONTAINER_DEF" \
               '{family:$f,networkMode:"awsvpc",requiresCompatibilities:["FARGATE"],cpu:$cpu,memory:$mem,executionRoleArn:$er,containerDefinitions:[$c]}')
             [ -n "$TASK_ROLE" ] && TASK_DEF_JSON=$(echo "$TASK_DEF_JSON" | jq --arg tr "$TASK_ROLE" '.+{taskRoleArn:$tr}')
@@ -499,16 +414,16 @@ jobs:
             fi
           fi
           
-          # Register
+          # Register task definition
           TASK_DEF_FILE=$(mktemp)
           echo "$TASK_DEF_JSON" > "$TASK_DEF_FILE"
           NEW_TASK_ARN=$(aws ecs register-task-definition --cli-input-json "file://${TASK_DEF_FILE}" --query 'taskDefinition.taskDefinitionArn' --output text)
           rm -f "$TASK_DEF_FILE"
+          
           echo "task_definition_arn=${NEW_TASK_ARN}" >> $GITHUB_OUTPUT
           echo "✅ Task definition: $NEW_TASK_ARN"
 
-      # ========== TARGET GROUP (API only) ==========
-      - name: Configurar Target Group
+      - name: Configure Target Group
         id: target-group
         if: inputs.service_type == 'api' && inputs.create_target_group_and_listener
         env:
@@ -523,47 +438,48 @@ jobs:
           LOAD_BALANCER_NAME: ${{ inputs.load_balancer_name }}
         run: |
           set -e
-          [ -z "$TG_NAME" ] && echo "❌ target_group_name obrigatório para API" && exit 1
+          [ -z "$TG_NAME" ] && echo "❌ target_group_name is required for API" && exit 1
           
-          # Resolver LB ARN
+          # Resolve LB ARN
           LB_ARN="$LOAD_BALANCER_ARN"
           if [ -z "$LB_ARN" ] && [ -n "$LOAD_BALANCER_NAME" ]; then
             LB_ARN=$(aws elbv2 describe-load-balancers --names "$LOAD_BALANCER_NAME" --query 'LoadBalancers[0].LoadBalancerArn' --output text 2>/dev/null || true)
-            [ -z "$LB_ARN" ] || [ "$LB_ARN" = "None" ] && echo "❌ LB '$LOAD_BALANCER_NAME' não encontrado" && exit 1
+            [ -z "$LB_ARN" ] || [ "$LB_ARN" = "None" ] && echo "❌ LB '$LOAD_BALANCER_NAME' not found" && exit 1
           fi
-          [ -z "$LB_ARN" ] && echo "❌ Informe load_balancer_arn ou load_balancer_name" && exit 1
+          [ -z "$LB_ARN" ] && echo "❌ Provide load_balancer_arn or load_balancer_name" && exit 1
           echo "load_balancer_arn=${LB_ARN}" >> $GITHUB_OUTPUT
           
-          # VPC
+          # Get VPC from subnet
           FIRST_SUBNET=$(echo "$SUBNET_IDS" | cut -d',' -f1)
           VPC_ID=$(aws ec2 describe-subnets --subnet-ids "$FIRST_SUBNET" --query 'Subnets[0].VpcId' --output text)
           
-          # TG existente?
+          # Check existing target group
           EXISTING_TG=$(aws elbv2 describe-target-groups --names "$TG_NAME" --query 'TargetGroups[0]' --output json 2>/dev/null || echo "null")
+          
           if [ "$EXISTING_TG" != "null" ]; then
             TG_ARN=$(echo "$EXISTING_TG" | jq -r '.TargetGroupArn')
-            echo "✅ TG existente: $TG_ARN"
+            echo "✅ Existing TG: $TG_ARN"
           else
-            echo "📝 Criando TG: $TG_NAME"
+            echo "📝 Creating TG: $TG_NAME"
             TG_ARN=$(aws elbv2 create-target-group \
               --name "$TG_NAME" --protocol "${TG_PROTOCOL:-HTTP}" --port "${TG_PORT:-80}" \
               --vpc-id "$VPC_ID" --target-type ip \
               --health-check-path "${TG_HEALTH_CHECK_PATH:-/}" --health-check-protocol "${TG_HEALTH_CHECK_PROTOCOL:-HTTP}" \
               --matcher "HttpCode=200-499" \
               --query 'TargetGroups[0].TargetGroupArn' --output text)
-            echo "✅ TG criado: $TG_ARN"
+            echo "✅ Created TG: $TG_ARN"
+            
             [ -n "$TG_DEREGISTRATION_DELAY" ] && [ "$TG_DEREGISTRATION_DELAY" != "300" ] && \
               aws elbv2 modify-target-group-attributes --target-group-arn "$TG_ARN" \
                 --attributes "Key=deregistration_delay.timeout_seconds,Value=$TG_DEREGISTRATION_DELAY"
           fi
           echo "target_group_arn=${TG_ARN}" >> $GITHUB_OUTPUT
 
-      # ========== LISTENER RULE (API only) ==========
-      - name: Configurar Listener Rule
+      - name: Configure Listener Rule
         id: listener-rule
         if: inputs.service_type == 'api' && inputs.create_target_group_and_listener
         env:
-          SERVICE: ${{ steps.validate.outputs.ecs_service }}
+          SERVICE: ${{ inputs.ecs_service }}
           LOAD_BALANCER_ARN: ${{ steps.target-group.outputs.load_balancer_arn }}
           TARGET_GROUP_ARN: ${{ steps.target-group.outputs.target_group_arn }}
           LISTENER_PORT: ${{ inputs.listener_port }}
@@ -574,23 +490,25 @@ jobs:
           set -e
           PORT="${LISTENER_PORT:-80}"
           
-          # Listener existente
+          # Get existing listener
           LISTENER_JSON=$(aws elbv2 describe-listeners --load-balancer-arn "$LOAD_BALANCER_ARN" \
             --query "Listeners[?Port==\`$PORT\`]" --output json | jq '.[0]')
-          [ "$LISTENER_JSON" = "null" ] && echo "❌ Listener porta $PORT não existe" && exit 1
+          [ "$LISTENER_JSON" = "null" ] && echo "❌ Listener on port $PORT does not exist" && exit 1
+          
           LISTENER_ARN=$(echo "$LISTENER_JSON" | jq -r '.ListenerArn')
           echo "✅ Listener: $LISTENER_ARN"
           echo "listener_arn=${LISTENER_ARN}" >> $GITHUB_OUTPUT
           
-          # Verificar regra existente
+          # Check existing rule for this target group
           RULES=$(aws elbv2 describe-rules --listener-arn "$LISTENER_ARN" --output json)
           TG_RULE=$(echo "$RULES" | jq -r --arg tg "$TARGET_GROUP_ARN" '.Rules[]|select(.Actions[]?.TargetGroupArn==$tg)|.RuleArn' | head -1)
           
           if [ -n "$TG_RULE" ]; then
-            echo "✅ TG já associado (regra: $TG_RULE)"
+            echo "✅ TG already associated (rule: $TG_RULE)"
           else
-            echo "📝 Criando regra no listener..."
-            # Prioridade
+            echo "📝 Creating listener rule..."
+            
+            # Determine priority
             if [ -n "$LISTENER_RULE_PRIORITY" ]; then
               PRIORITY="$LISTENER_RULE_PRIORITY"
             else
@@ -598,12 +516,12 @@ jobs:
               PRIORITY=$((MAX_P + 1))
             fi
             
-            # Condições
+            # Build conditions
             COND_FILE=$(mktemp)
             if [ -n "$LISTENER_RULE_HOST" ] && [ -n "$LISTENER_RULE_PATH" ]; then
               jq -n --arg h "$LISTENER_RULE_HOST" --arg p "$LISTENER_RULE_PATH" \
                 '[{Field:"host-header",HostHeaderConfig:{Values:[$h]}},{Field:"path-pattern",PathPatternConfig:{Values:[$p]}}]' > "$COND_FILE"
-              DESC="Host:$LISTENER_RULE_HOST E Path:$LISTENER_RULE_PATH"
+              DESC="Host:$LISTENER_RULE_HOST AND Path:$LISTENER_RULE_PATH"
             elif [ -n "$LISTENER_RULE_HOST" ]; then
               jq -n --arg h "$LISTENER_RULE_HOST" '[{Field:"host-header",HostHeaderConfig:{Values:[$h]}}]' > "$COND_FILE"
               DESC="Host:$LISTENER_RULE_HOST"
@@ -613,20 +531,19 @@ jobs:
               DESC="Path:$PATH"
             fi
             
-            echo "   Prioridade: $PRIORITY | Condição: $DESC"
+            echo "   Priority: $PRIORITY | Condition: $DESC"
             RULE_ARN=$(aws elbv2 create-rule --listener-arn "$LISTENER_ARN" --priority "$PRIORITY" \
               --conditions "file://${COND_FILE}" --actions "Type=forward,TargetGroupArn=$TARGET_GROUP_ARN" \
               --query 'Rules[0].RuleArn' --output text)
             rm -f "$COND_FILE"
-            echo "✅ Regra criada: $RULE_ARN"
+            echo "✅ Rule created: $RULE_ARN"
           fi
 
-      # ========== CREATE/UPDATE SERVICE ==========
       - name: Deploy ECS Service
         id: ecs-deploy
         env:
           CLUSTER: ${{ inputs.ecs_cluster || secrets.ECS_CLUSTER }}
-          SERVICE: ${{ steps.validate.outputs.ecs_service }}
+          SERVICE: ${{ inputs.ecs_service }}
           NEW_TASK_ARN: ${{ steps.task-def.outputs.task_definition_arn }}
           SERVICE_EXISTS: ${{ steps.task-def.outputs.service_exists }}
           SERVICE_TYPE: ${{ inputs.service_type }}
@@ -685,7 +602,7 @@ jobs:
           fi
           
           if [ "$SERVICE_EXISTS" = "true" ]; then
-            echo "🔄 Atualizando service..."
+            echo "🔄 Updating service..."
             CMD="aws ecs update-service --cluster $CLUSTER --service $SERVICE --task-definition $NEW_TASK_ARN --force-new-deployment"
             [ "$ENABLE_ZONE_REBALANCING" = "true" ] && CMD="$CMD --availability-zone-rebalancing ENABLED"
             [ -n "$HEALTH_GRACE_PERIOD" ] && CMD="$CMD --health-check-grace-period-seconds $HEALTH_GRACE_PERIOD"
@@ -694,8 +611,8 @@ jobs:
             [ -n "$DEPLOY_CFG" ] && CMD="$CMD $DEPLOY_CFG"
             $CMD --query 'service.serviceArn' --output text
           else
-            echo "🆕 Criando service..."
-            [ -z "$SUBNET_IDS" ] || [ -z "$SECURITY_GROUPS" ] && echo "❌ subnet_ids e security_group_ids obrigatórios" && exit 1
+            echo "🆕 Creating service..."
+            [ -z "$SUBNET_IDS" ] || [ -z "$SECURITY_GROUPS" ] && echo "❌ subnet_ids and security_group_ids are required" && exit 1
             
             SUBNETS=$(echo "$SUBNET_IDS" | tr ',' '\n' | jq -R . | jq -s .)
             SGS=$(echo "$SECURITY_GROUPS" | tr ',' '\n' | jq -R . | jq -s .)
@@ -723,35 +640,37 @@ jobs:
           [ -n "$CFG_FILE" ] && rm -f "$CFG_FILE" 2>/dev/null || true
           [ -n "$CP_FILE" ] && rm -f "$CP_FILE" 2>/dev/null || true
 
-      - name: Aguardar estabilização
-        id: ecs-finalize
+      - name: Wait for stabilization
+        id: finalize
         env:
           CLUSTER: ${{ inputs.ecs_cluster || secrets.ECS_CLUSTER }}
-          SERVICE: ${{ steps.validate.outputs.ecs_service }}
+          SERVICE: ${{ inputs.ecs_service }}
         run: |
-          echo "⏳ Aguardando deployment estabilizar..."
+          echo "⏳ Waiting for deployment to stabilize..."
           aws ecs wait services-stable --cluster "$CLUSTER" --services "$SERVICE"
           SERVICE_ARN=$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" --query 'services[0].serviceArn' --output text)
           echo "service_arn=${SERVICE_ARN}" >> $GITHUB_OUTPUT
-          echo "✅ Deployment concluído: $SERVICE_ARN"
+          echo "✅ Deployment complete: $SERVICE_ARN"
 
-      - name: Gerar deploy metadata
+      - name: Generate deploy metadata
+        id: metadata
         if: success()
         run: |
+          ARTIFACT_NAME="deploy-${{ inputs.environment }}-${{ inputs.ecs_service }}-${{ github.run_id }}"
           mkdir -p .deploys
           cat << EOF > .deploys/deploy.json
           {
             "environment": "${{ inputs.environment }}",
             "ecs_service": "${{ inputs.ecs_service }}",
-            "image_digest": "${{ steps.ecr-push.outputs.image_digest }}",
-            "image_tag": "${{ steps.ecr-push.outputs.image_tag }}",
+            "image_uri": "${{ inputs.image_uri }}",
             "task_definition_arn": "${{ steps.task-def.outputs.task_definition_arn }}",
-            "service_arn": "${{ steps.ecs-finalize.outputs.service_arn }}",
+            "service_arn": "${{ steps.finalize.outputs.service_arn }}",
             "commit_sha": "${{ github.sha }}",
             "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
             "run_id": "${{ github.run_id }}"
           }
           EOF
+          echo "artifact_name=${ARTIFACT_NAME}" >> $GITHUB_OUTPUT
 
       - name: Upload deploy metadata
         uses: actions/upload-artifact@v4
@@ -764,9 +683,10 @@ jobs:
         if: inputs.enable_health_check && inputs.health_check_url != ''
         run: |
           URL="${{ inputs.health_check_url }}"
+          echo "🔍 Running health check: $URL"
           for i in $(seq 1 12); do
             curl -sf "$URL" > /dev/null && echo "✅ Health check OK" && exit 0
-            echo "Tentativa $i/12 falhou; aguardando 10s..."
+            echo "Attempt $i/12 failed; waiting 10s..."
             sleep 10
           done
-          echo "❌ Health check falhou" && exit 1
+          echo "❌ Health check failed" && exit 1
