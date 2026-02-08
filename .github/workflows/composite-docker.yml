@@ -64,8 +64,6 @@ on:
         required: true
       AWS_SECRET_ACCESS_KEY:
         required: true
-      REPO_ACCESS_TOKEN:
-        required: false
     outputs:
       image_digest:
         description: 'Image digest'
