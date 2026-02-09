@@ -373,9 +373,18 @@ jobs:
             TASK_DEF_JSON=$(echo "$TASK_DEF_JSON" | jq 'del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy)')
             TASK_DEF_JSON=$(echo "$TASK_DEF_JSON" | jq --arg img "$FULL_IMAGE" '.containerDefinitions[0].image = $img')
             
+            # Merge idempotente de environment (por name): input vazio preserva existente
             if [ -n "$CONTAINER_ENVIRONMENT" ] && [ "$CONTAINER_ENVIRONMENT" != "[]" ]; then
               echo "$CONTAINER_ENVIRONMENT" | jq -e . >/dev/null 2>&1 && \
-              TASK_DEF_JSON=$(echo "$TASK_DEF_JSON" | jq --argjson env "$CONTAINER_ENVIRONMENT" '.containerDefinitions[0].environment = $env')
+              TASK_DEF_JSON=$(echo "$TASK_DEF_JSON" | jq --argjson env "$CONTAINER_ENVIRONMENT" \
+                '.containerDefinitions[0].environment = ([.containerDefinitions[0].environment // [] | .[], $env[]] | group_by(.name) | map(last))')
+            fi
+            
+            # Merge idempotente de secrets (por name): input vazio preserva existente
+            if [ -n "$CONTAINER_SECRETS" ] && [ "$CONTAINER_SECRETS" != "[]" ]; then
+              echo "$CONTAINER_SECRETS" | jq -e . >/dev/null 2>&1 && \
+              TASK_DEF_JSON=$(echo "$TASK_DEF_JSON" | jq --argjson sec "$CONTAINER_SECRETS" \
+                '.containerDefinitions[0].secrets = ([.containerDefinitions[0].secrets // [] | .[], $sec[]] | group_by(.name) | map(last))')
             fi
           else
             echo "🆕 Service does not exist: creating task definition from scratch..."
