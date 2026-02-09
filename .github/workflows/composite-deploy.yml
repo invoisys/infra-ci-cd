@@ -321,6 +321,7 @@ jobs:
           # Validate required inputs
           [ -z "${{ inputs.image_uri }}" ] && echo "❌ image_uri is required" && exit 1
           [ -z "${{ inputs.ecs_service }}" ] && echo "❌ ecs_service is required" && exit 1
+          echo "✅ All required inputs provided"
 
       - name: Validate secrets
         run: |
