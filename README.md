@@ -39,26 +39,17 @@ graph LR
 
 ## 🚀 Quick Start
 
-### 1. Adicione os workflows ao seu projeto
-
-```bash
-# Copie os workflows para .github/workflows/
-cp -r infra-ci-cd/.github/workflows/ .github/
-cp -r infra-ci-cd/.github/actions/ .github/
-cp -r infra-ci-cd/.github/tech-configs/ .github/
-```
-
-### 2. Configure os environments no GitHub
+### 1. Configure os environments no GitHub
 
 Acesse `Settings > Environments` e crie: `dev`, `qa`, `sbx`, `prd`
 
-### 3. Configure variáveis e secrets
+### 2. Configure variáveis e secrets
 
 Defina em cada environment:
 - `ECR_REGISTRY`, `ECS_CLUSTER`, `SUBNET_IDS` etc.
 - Secrets: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`
 
-### 4. Crie seu workflow de deploy
+### 3. Crie seu workflow de deploy
 
 ```yaml
 name: Deploy
@@ -117,9 +108,6 @@ jobs:
 - **[Environments](docs/environments.md)**: Configuração de environments, variáveis e secrets
 - **[Diagramas](docs/diagramas.md)**: Visualizações dos fluxos e arquitetura
 
-### 🎯 Implementação
-- **[Guia de Adaptação](docs/adaptacao.md)**: Como adaptar o pipeline para seu projeto
-
 ## ✨ Características
 
 ### 🏗️ **Arquitetura Modular**
@@ -174,10 +162,6 @@ jobs:
 ### Atualmente Suportadas
 - **.NET**: 6.0, 7.0, 8.0+
 - **Node.js**: 18, 20, LTS
-
-## 🤝 Contribuição
-
-Contribuições são bem-vindas! Veja nosso [exemplo de uso](../exemplo-uso-pipeline/) para referência de implementação.
 
 ### Adicionando Nova Tecnologia
 
