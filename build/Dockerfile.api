@@ -9,6 +9,7 @@ WORKDIR /src
 COPY src/*.sln ./
 COPY src/*/*.csproj ./
 RUN for f in *.csproj; do mkdir -p "${f%.*}/" && mv "$f" "${f%.*}/"; done
+RUN dotnet nuget add source "https://invoisys-nuget.s3.amazonaws.com/index.json" -n "invoisys"
 RUN dotnet restore
 
 COPY src/. .

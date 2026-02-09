@@ -3,19 +3,20 @@
 # Build context: raiz do repositório da aplicação.
 # ARG PROJECT_NAME: nome do projeto .csproj (ex.: Inbound.Nfe.Wrk.ProcessaXml)
 
-FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:7.0 AS build
 WORKDIR /src
 
 COPY src/*.sln ./
 COPY src/*/*.csproj ./
 RUN for f in *.csproj; do mkdir -p "${f%.*}/" && mv "$f" "${f%.*}/"; done
+RUN dotnet nuget add source "https://invoisys-nuget.s3.amazonaws.com/index.json" -n "invoisys"
 RUN dotnet restore
 
 COPY src/. .
 ARG PROJECT_NAME
 RUN dotnet publish "${PROJECT_NAME}/${PROJECT_NAME}.csproj" -c Release -o /app/publish --no-restore
 
-FROM mcr.microsoft.com/dotnet/runtime:8.0
+FROM mcr.microsoft.com/dotnet/runtime:7.0
 WORKDIR /app
 
 COPY --from=build /app/publish .
