@@ -97,6 +97,12 @@ jobs:
             *) echo "❌ Invalid service_type: ${{ inputs.service_type }}. Must be: api, worker" && exit 1 ;;
           esac
 
+      - name: Validate secrets
+        run: |
+          [ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ] && echo "❌ AWS_ACCESS_KEY_ID not provided" && exit 1
+          [ -z "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ] && echo "❌ AWS_SECRET_ACCESS_KEY not provided" && exit 1
+          echo "✅ AWS credentials provided"
+
       - name: Checkout application
         uses: actions/checkout@v4
 
@@ -107,7 +113,7 @@ jobs:
           repository: ${{ inputs.templates_repo }}
           ref: ${{ inputs.templates_ref }}
           path: .ci-templates
-          token: ${{ secrets.REPO_ACCESS_TOKEN || github.token }}
+          token: ${{ github.token }}
 
       - name: Determine Dockerfile path
         id: dockerfile

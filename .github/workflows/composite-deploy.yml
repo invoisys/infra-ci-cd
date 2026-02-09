@@ -322,6 +322,12 @@ jobs:
           [ -z "${{ inputs.image_uri }}" ] && echo "❌ image_uri is required" && exit 1
           [ -z "${{ inputs.ecs_service }}" ] && echo "❌ ecs_service is required" && exit 1
 
+      - name: Validate secrets
+        run: |
+          [ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ] && echo "❌ AWS_ACCESS_KEY_ID not provided" && exit 1
+          [ -z "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ] && echo "❌ AWS_SECRET_ACCESS_KEY not provided" && exit 1
+          echo "✅ AWS credentials provided"
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
