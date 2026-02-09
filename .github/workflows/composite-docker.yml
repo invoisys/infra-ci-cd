@@ -127,7 +127,7 @@ jobs:
             DF=".ci-templates/build/Dockerfile.${{ inputs.service_type }}"
           else
             DF="${{ inputs.dockerfile_path }}"
-            [ -z "$DF" ] && DF="Dockerfile
+            [ -z "$DF" ] && DF="Dockerfile"
           fi
           
           if [ ! -f "$DF" ]; then
