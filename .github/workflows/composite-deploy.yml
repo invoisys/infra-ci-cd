@@ -259,18 +259,6 @@ on:
         required: false
         type: string
         default: ''
-      
-      # Health Check
-      enable_health_check:
-        description: 'Run HTTP health check post-deploy'
-        required: false
-        type: boolean
-        default: false
-      health_check_url:
-        description: 'Health check URL'
-        required: false
-        type: string
-        default: ''
         
     secrets:
       AWS_ACCESS_KEY_ID:
@@ -690,15 +678,3 @@ jobs:
         with:
           name: deploy-${{ inputs.environment }}-${{ inputs.ecs_service }}-${{ github.run_id }}
           path: .deploys
-
-      - name: Health check
-        if: inputs.enable_health_check && inputs.health_check_url != ''
-        run: |
-          URL="${{ inputs.health_check_url }}"
-          echo "🔍 Running health check: $URL"
-          for i in $(seq 1 12); do
-            curl -sf "$URL" > /dev/null && echo "✅ Health check OK" && exit 0
-            echo "Attempt $i/12 failed; waiting 10s..."
-            sleep 10
-          done
-          echo "❌ Health check failed" && exit 1
