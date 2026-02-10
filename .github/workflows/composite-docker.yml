@@ -44,6 +44,10 @@ on:
         required: false
         type: string
         default: ''
+      tag_name:
+        description: 'tag name (used for image tagging)'
+        required: true
+        type: string
       aws_region:
         description: 'AWS region'
         required: false
@@ -51,11 +55,6 @@ on:
         default: 'us-east-1'
       ecr_registry:
         description: 'ECR registry URL (optional, auto-detected)'
-        required: false
-        type: string
-        default: ''
-      image_tags:
-        description: 'Additional image tags (comma-separated)'
         required: false
         type: string
         default: ''
@@ -182,28 +181,17 @@ jobs:
         run: |
           echo "📤 Pushing to ECR..."
           
-          # Tag with SHA
+          SHORT_SHA="${{ github.sha }}"
+          SHORT_SHA="${SHORT_SHA:0:7}"
+          SVC_TAG="${{ inputs.tag_name }}-${SHORT_SHA}"
+          
+          # Tag 1: commit hash completo
           docker tag ci-build "${IMG_BASE}:${{ github.sha }}"
           docker push "${IMG_BASE}:${{ github.sha }}"
           
-          # Tag with branch
-          docker tag ci-build "${IMG_BASE}:${{ github.ref_name }}"
-          docker push "${IMG_BASE}:${{ github.ref_name }}"
-          
-          # Tag with timestamp
-          TS="$(date -u +%Y%m%d-%H%M%S)"
-          docker tag ci-build "${IMG_BASE}:${TS}"
-          docker push "${IMG_BASE}:${TS}"
-          
-          # Additional tags
-          if [ -n "${{ inputs.image_tags }}" ]; then
-            IFS=',' read -ra TAGS <<< "${{ inputs.image_tags }}"
-            for tag in "${TAGS[@]}"; do
-              tag=$(echo "$tag" | xargs)  # trim whitespace
-              docker tag ci-build "${IMG_BASE}:${tag}"
-              docker push "${IMG_BASE}:${tag}"
-            done
-          fi
+          # Tag 2: tag_name + short hash
+          docker tag ci-build "${IMG_BASE}:${SVC_TAG}"
+          docker push "${IMG_BASE}:${SVC_TAG}"
           
           # Get digest
           DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' ci-build | cut -d'@' -f2)
@@ -214,6 +202,7 @@ jobs:
           echo "registry=${REGISTRY}" >> $GITHUB_OUTPUT
           
           echo "✅ Pushed: ${IMG_BASE}:${{ github.sha }}"
+          echo "✅ Pushed: ${IMG_BASE}:${SVC_TAG}"
 
       - name: Output for dry-run (no push)
         id: no-push

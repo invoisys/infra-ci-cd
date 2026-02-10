@@ -157,16 +157,6 @@ on:
         required: false
         type: string
         default: '80'
-      listener_protocol:
-        description: 'Listener protocol'
-        required: false
-        type: string
-        default: 'HTTP'
-      listener_certificate_arn:
-        description: 'ACM certificate ARN'
-        required: false
-        type: string
-        default: ''
       target_group_name:
         description: 'Target group name'
         required: false

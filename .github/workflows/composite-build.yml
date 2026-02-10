@@ -21,11 +21,6 @@ on:
         required: false
         type: string
         default: 'src'
-      project_name:
-        description: 'Project name (for .NET .csproj)'
-        required: false
-        type: string
-        default: ''
       build_args:
         description: 'Additional build arguments'
         required: false
