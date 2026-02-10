@@ -63,6 +63,11 @@ on:
         description: 'Ambiente (dev|qa|sbx|prd)'
         required: true
         type: string
+      build_context:
+        description: 'Docker build context directory'
+        required: false
+        type: string
+        default: '.'
     secrets:
       AWS_ACCESS_KEY_ID:
         required: true
@@ -163,7 +168,7 @@ jobs:
           BUILD_ARGS=""
           [ -n "${{ inputs.project_name }}" ] && BUILD_ARGS="--build-arg PROJECT_NAME=${{ inputs.project_name }}"
           
-          docker build -t ci-build -f ${{ steps.dockerfile.outputs.path }} $BUILD_ARGS .
+          docker build -t ci-build -f ${{ steps.dockerfile.outputs.path }} $BUILD_ARGS ${{ inputs.build_context }}
           
           echo "image_base=$IMG" >> $GITHUB_OUTPUT
           echo "registry=$REGISTRY" >> $GITHUB_OUTPUT
