@@ -32,12 +32,6 @@ on:
         type: string
         default: ''
     outputs:
-      artifact_path:
-        description: 'Path to build artifacts'
-        value: ${{ jobs.build.outputs.artifact_path }}
-      artifact_name:
-        description: 'Artifact name for download'
-        value: ${{ jobs.build.outputs.artifact_name }}
       build_success:
         description: 'Whether build completed successfully'
         value: ${{ jobs.build.outputs.build_success }}
@@ -47,8 +41,6 @@ jobs:
     name: Build (${{ inputs.technology }})
     runs-on: ubuntu-latest
     outputs:
-      artifact_path: ${{ steps.upload.outputs.artifact_path }}
-      artifact_name: ${{ steps.upload.outputs.artifact_name }}
       build_success: ${{ steps.build.outputs.success }}
 
     steps:
@@ -120,30 +112,4 @@ jobs:
             echo "success=${{ steps.build-node.outputs.success || 'false' }}" >> $GITHUB_OUTPUT
           fi
 
-      # ===== Upload Artifacts =====
-      - name: Prepare artifacts (.NET)
-        if: inputs.technology == 'dotnet'
-        id: prepare-dotnet
-        run: |
-          ARTIFACT_PATH="${{ inputs.working_directory }}"
-          echo "artifact_path=${ARTIFACT_PATH}" >> $GITHUB_OUTPUT
 
-      - name: Prepare artifacts (Node.js)
-        if: inputs.technology == 'node'
-        id: prepare-node
-        run: |
-          ARTIFACT_PATH="${{ inputs.working_directory }}"
-          echo "artifact_path=${ARTIFACT_PATH}" >> $GITHUB_OUTPUT
-
-      - name: Upload build artifacts
-        id: upload
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-${{ inputs.technology }}-${{ github.sha }}
-          path: ${{ inputs.working_directory }}
-          retention-days: 1
-
-      - name: Set outputs
-        run: |
-          echo "artifact_path=${{ inputs.working_directory }}" >> $GITHUB_OUTPUT
-          echo "artifact_name=build-${{ inputs.technology }}-${{ github.sha }}" >> $GITHUB_OUTPUT

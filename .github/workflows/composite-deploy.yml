@@ -658,18 +658,17 @@ jobs:
         run: |
           ARTIFACT_NAME="deploy-${{ inputs.environment }}-${{ inputs.ecs_service }}-${{ github.run_id }}"
           mkdir -p .deploys
-          cat << EOF > .deploys/deploy.json
-          {
-            "environment": "${{ inputs.environment }}",
-            "ecs_service": "${{ inputs.ecs_service }}",
-            "image_uri": "${{ inputs.image_uri }}",
-            "task_definition_arn": "${{ steps.task-def.outputs.task_definition_arn }}",
-            "service_arn": "${{ steps.finalize.outputs.service_arn }}",
-            "commit_sha": "${{ github.sha }}",
-            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-            "run_id": "${{ github.run_id }}"
-          }
-          EOF
+          jq -n \
+            --arg env "${{ inputs.environment }}" \
+            --arg svc "${{ inputs.ecs_service }}" \
+            --arg img "${{ inputs.image_uri }}" \
+            --arg td "${{ steps.task-def.outputs.task_definition_arn }}" \
+            --arg sa "${{ steps.finalize.outputs.service_arn }}" \
+            --arg sha "${{ github.sha }}" \
+            --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg rid "${{ github.run_id }}" \
+            '{environment:$env,ecs_service:$svc,image_uri:$img,task_definition_arn:$td,service_arn:$sa,commit_sha:$sha,timestamp:$ts,run_id:$rid}' \
+            > .deploys/deploy.json
           echo "artifact_name=${ARTIFACT_NAME}" >> $GITHUB_OUTPUT
 
       - name: Upload deploy metadata

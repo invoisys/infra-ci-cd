@@ -35,9 +35,6 @@ on:
       tests_passed:
         description: 'Whether tests passed'
         value: ${{ jobs.test.outputs.tests_passed }}
-      coverage_report_path:
-        description: 'Path to coverage report (if available)'
-        value: ${{ jobs.test.outputs.coverage_report_path }}
 
 jobs:
   test:
@@ -45,7 +42,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       tests_passed: ${{ steps.result.outputs.tests_passed }}
-      coverage_report_path: ${{ steps.result.outputs.coverage_report_path }}
 
     steps:
       - name: Skip tests (if requested)
@@ -135,22 +131,9 @@ jobs:
         run: |
           if [ "${{ inputs.skip_tests }}" = "true" ]; then
             echo "tests_passed=true" >> $GITHUB_OUTPUT
-            echo "coverage_report_path=" >> $GITHUB_OUTPUT
           elif [ "${{ inputs.technology }}" = "dotnet" ]; then
             echo "tests_passed=${{ steps.test-dotnet.outputs.tests_passed || 'false' }}" >> $GITHUB_OUTPUT
-            echo "coverage_report_path=${{ inputs.working_directory }}/TestResults" >> $GITHUB_OUTPUT
           else
             echo "tests_passed=${{ steps.test-node.outputs.tests_passed || 'false' }}" >> $GITHUB_OUTPUT
-            echo "coverage_report_path=${{ inputs.working_directory }}/coverage" >> $GITHUB_OUTPUT
           fi
 
-      - name: Upload test results
-        if: '!inputs.skip_tests && always()'
-        uses: actions/upload-artifact@v4
-        continue-on-error: true
-        with:
-          name: test-results-${{ inputs.technology }}-${{ github.sha }}
-          path: |
-            ${{ inputs.working_directory }}/**/TestResults/
-            ${{ inputs.working_directory }}/coverage/
-          retention-days: 7
