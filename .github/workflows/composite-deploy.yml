@@ -272,16 +272,6 @@ on:
         type: string
         default: ''
         
-    secrets:
-      AWS_ACCESS_KEY_ID:
-        required: true
-      AWS_SECRET_ACCESS_KEY:
-        required: true
-      ECS_CLUSTER:
-        required: false
-      ECS_TASK_EXECUTION_ROLE_ARN:
-        required: false
-        
     outputs:
       service_arn:
         description: 'ECS service ARN'
