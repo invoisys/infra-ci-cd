@@ -1,0 +1,18 @@
+# Dockerfile genérico para APIs Node.js (repo de templates CI/CD)
+# Usado quando use_template_dockerfile=true no pipeline.
+# Build context: raiz do repositório da aplicação.
+
+FROM node:20-alpine
+
+WORKDIR /app
+
+# Copiar manifests primeiro para cache de dependências
+COPY src/package*.json ./
+RUN npm ci --omit=dev
+
+# Copiar código-fonte
+COPY src/. .
+
+EXPOSE 80
+
+CMD ["node", "index.js"]

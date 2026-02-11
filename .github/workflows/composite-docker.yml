@@ -6,6 +6,11 @@ name: Docker
 on:
   workflow_call:
     inputs:
+      technology:
+        description: 'Technology: dotnet or node'
+        required: false
+        type: string
+        default: 'dotnet'
       ecr_repo:
         description: 'ECR repository name'
         required: true
@@ -105,6 +110,10 @@ jobs:
             api|worker) echo "✅ Service type: ${{ inputs.service_type }}" ;;
             *) echo "❌ Invalid service_type: ${{ inputs.service_type }}. Must be: api, worker" && exit 1 ;;
           esac
+          case "${{ inputs.technology }}" in
+            dotnet|node) echo "✅ Technology: ${{ inputs.technology }}" ;;
+            *) echo "❌ Invalid technology: ${{ inputs.technology }}. Supported: dotnet, node" && exit 1 ;;
+          esac
 
       - name: Validate secrets
         run: |
@@ -128,7 +137,7 @@ jobs:
         id: dockerfile
         run: |
           if [ "${{ inputs.use_template_dockerfile }}" = "true" ] && [ -n "${{ inputs.templates_repo }}" ]; then
-            DF=".ci-templates/build/Dockerfile.${{ inputs.service_type }}"
+            DF=".ci-templates/build/${{ inputs.technology }}/Dockerfile.${{ inputs.service_type }}"
           else
             DF="${{ inputs.dockerfile_path }}"
             [ -z "$DF" ] && DF="Dockerfile"
@@ -165,7 +174,9 @@ jobs:
           echo "🐳 Building image: $IMG"
           
           BUILD_ARGS=""
-          [ -n "${{ inputs.project_name }}" ] && BUILD_ARGS="--build-arg PROJECT_NAME=${{ inputs.project_name }}"
+          if [ "${{ inputs.technology }}" = "dotnet" ] && [ -n "${{ inputs.project_name }}" ]; then
+            BUILD_ARGS="--build-arg PROJECT_NAME=${{ inputs.project_name }}"
+          fi
           
           docker build -t ci-build -f ${{ steps.dockerfile.outputs.path }} $BUILD_ARGS ${{ inputs.build_context }}
           
