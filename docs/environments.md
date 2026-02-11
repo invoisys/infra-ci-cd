@@ -1,250 +1,93 @@
 # Configuração de Environments
 
-Guia completo para configurar environments, variáveis e secrets no GitHub para usar com os workflows compostos.
+Guia para configurar a **config de deploy** (centralizada na organização) e o uso de **environments** no repositório (aprovações, wait timers, restrição de branches).
 
-## Pré-requisitos
+## Modelo recomendado: config na organização
 
-Antes de configurar os environments, você deve ter:
+A **configuração de deploy** (ECR, ECS, rede, load balancer) fica na **organização** GitHub, não por environment no repositório:
 
-- **Acesso de Admin**: Permissão para criar environments no repositório GitHub
-- **Conta AWS**: Acesso à conta AWS com permissões para:
-  - ECR (Elastic Container Registry)
-  - ECS (Elastic Container Service)  
-  - VPC (subnets e security groups)
-  - ALB/ELB (para APIs)
-  - IAM (roles de execução)
+1. **Uma variável por ambiente (JSON)**  
+   Nome: `{ENV}_CONFIG_DEPLOY` (ex.: `SBX_CONFIG_DEPLOY`, `PRD_CONFIG_DEPLOY`).  
+   Valor: JSON com as chaves `ecr_registry`, `ecs_cluster`, `ecs_task_execution_role_arn`, `ecs_task_role_arn`, `subnet_ids`, `security_group_ids`, `load_balancer_name`.  
+   Schema e exemplos: [organization-variables.md](organization-variables.md).
 
-## Mapa de Environments
+2. **Secrets por ambiente**  
+   Na organização: `{ENV}_AWS_ACCESS_KEY_ID`, `{ENV}_AWS_SECRET_ACCESS_KEY` (ex.: `SBX_AWS_ACCESS_KEY_ID`, `SBX_AWS_SECRET_ACCESS_KEY`).
 
-O pipeline suporta 4 environments padrão, cada um mapeado para branches específicas:
+3. **Resolução no workflow**  
+   O job `prepare` do repositório usa o ambiente (branch) para escolher qual variável e quais secrets ler, faz parse do JSON com `jq` e escreve os valores nos outputs. Os jobs `docker` e `deploy` consomem `needs.prepare.outputs.*`.  
+   Template do step: [deploy-env-pattern.md](deploy-env-pattern.md).
 
-| Environment | Branch | Descrição | Uso |
-|-------------|--------|-----------|-----|
-| `dev` | `develop` | Desenvolvimento | Testes contínuos, integração |
-| `qa` | `qa`, `staging` | Qualidade/Homologação | Testes de QA, validação |
-| `sbx` | `sandbox` | Sandbox | Testes experimentais |
-| `prd` | `main`, `master` | Produção | Ambiente final dos usuários |
+Variáveis **específicas da aplicação** (filas SQS, URLs de API, etc.) continuam no repositório ou na organização com escopo ao repositório; não entram no JSON de deploy.
+
+## Quando usar environments no repositório
+
+Crie **environments** no repositório (`Settings > Environments`: `dev`, `qa`, `sbx`, `prd`) quando precisar de:
+
+- **Approval gates**: exigir aprovação de um ou mais revisores antes do deploy (ex.: `prd`).
+- **Wait timer**: tempo de espera antes do deploy.
+- **Restrição de branches**: permitir deploy apenas em branches específicas.
+
+Os **valores de deploy** (ECR, ECS, rede) vêm da organização (`CONFIG_DEPLOY` + secrets). O `environment:` no workflow é usado para acionar as regras de proteção do GitHub (approval, wait, branch), não para definir ECR_REGISTRY, ECS_CLUSTER, etc.
+
+## Mapa de ambientes
+
+O pipeline usa o nome da **branch** para decidir qual config da organização ler (`ref_name` → `vars.{ENV}_CONFIG_DEPLOY`). Convenção típica:
+
+| Ambiente | Prefixo vars/secrets | Branch típica | Descrição |
+|----------|---------------------|---------------|-----------|
+| dev | `DEV_` | `dev` | Desenvolvimento |
+| qa | `QA_` | `qa` | Qualidade / homologação |
+| sbx | `SBX_` | `sbx` | Sandbox |
+| prd | `PRD_` | `prd`, `main` | Produção |
 
 ## Configuração no GitHub
 
-### 1. Criar Environments
+### 1. Organização (obrigatório para deploy)
 
-Acesse `Settings > Environments` no seu repositório e crie os seguintes environments:
+- **Variables**: criar `DEV_CONFIG_DEPLOY`, `QA_CONFIG_DEPLOY`, `SBX_CONFIG_DEPLOY`, `PRD_CONFIG_DEPLOY` com JSON conforme [organization-variables.md](organization-variables.md). Dar acesso aos repositórios que farão deploy.
+- **Secrets**: criar `{ENV}_AWS_ACCESS_KEY_ID` e `{ENV}_AWS_SECRET_ACCESS_KEY` para cada ambiente e dar acesso aos repositórios.
 
-- `dev`
-- `qa` 
-- `sbx`
-- `prd`
+### 2. Repositório – environments (opcional)
 
-### 2. Configurar Proteções (Opcional)
+Se usar approval/wait timer/restrição de branch:
 
-Para environments sensíveis (`prd`, `qa`), configure:
+- Acesse `Settings > Environments` no repositório.
+- Crie `dev`, `qa`, `sbx`, `prd` conforme necessidade.
+- Configure **Protection rules**, **Wait timer**, **Deployment branch** onde fizer sentido (ex.: `prd` com 1 reviewer e wait 5 min).
 
-- **Protection rules**: Require reviewers (1-6 pessoas)
-- **Wait timer**: Tempo de espera antes do deploy (ex: 5 minutos)
-- **Restrict branches**: Apenas branches específicas
+## Variáveis e secrets – referência rápida
 
-## Variáveis por Environment
+| Onde | O quê | Exemplos |
+|------|-------|----------|
+| **Organização** | Config de deploy (JSON) | `SBX_CONFIG_DEPLOY`, `PRD_CONFIG_DEPLOY` |
+| **Organização** | Credenciais AWS por ambiente | `SBX_AWS_ACCESS_KEY_ID`, `SBX_AWS_SECRET_ACCESS_KEY` |
+| **Repositório** | Config específica da aplicação | `SQS_QUEUE_URL`, `API_PROXY_URL`, `ABBYY_SECRET_ID` |
 
-Configure as seguintes variáveis em cada environment criado:
+Detalhes do schema JSON e lista completa: [organization-variables.md](organization-variables.md).
 
-### Variáveis Obrigatórias
+## Permissões IAM necessárias
 
-| Variável | Descrição | Exemplo | Notas |
-|----------|-----------|---------|-------|
-| `ECR_REGISTRY` | URL do registry ECR | `123456789.dkr.ecr.us-east-1.amazonaws.com` | Obtido no console ECR |
-| `ECS_CLUSTER` | Nome do cluster ECS | `meu-cluster-dev` | Um por environment |
-| `ECS_TASK_EXECUTION_ROLE_ARN` | ARN da role de execução | `arn:aws:iam::123456789:role/ecsTaskExecutionRole` | Permissões para ECR/CloudWatch |
-
-### Variáveis de Rede
-
-| Variável | Descrição | Exemplo | Notas |
-|----------|-----------|---------|-------|
-| `SUBNET_IDS` | IDs das subnets privadas | `subnet-xxx,subnet-yyy` | Separadas por vírgula |
-| `SECURITY_GROUP_IDS` | IDs dos security groups | `sg-xxx,sg-yyy` | Separados por vírgula |
-| `ASSIGN_PUBLIC_IP` | Atribuir IP público | `DISABLED` | ENABLED/DISABLED |
-
-### Variáveis de Load Balancer (APIs apenas)
-
-| Variável | Descrição | Exemplo | Notas |
-|----------|-----------|---------|-------|
-| `LOAD_BALANCER_ARN` | ARN do ALB | `arn:aws:elasticloadbalancing:us-east-1:123456789:loadbalancer/app/dev-alb/abcdef123456` | Para APIs |
-| `LOAD_BALANCER_NAME` | Nome do ALB | `dev-alb` | Alternativa ao ARN |
-| `TARGET_GROUP_PORT` | Porta do target group | `80` | Padrão: 80 |
-| `LISTENER_PORT` | Porta do listener | `80` | Padrão: 80 |
-
-### Variáveis Opcionais
-
-| Variável | Descrição | Exemplo | Padrão |
-|----------|-----------|---------|--------|
-| `AWS_REGION` | Região AWS | `us-east-1` | `us-east-1` |
-| `TASK_CPU` | CPU das tasks | `512` | `256` |
-| `TASK_MEMORY` | Memória das tasks | `1024` | `512` |
-| `DESIRED_COUNT` | Número de tasks | `2` | `1` |
-
-## Secrets Necessários
-
-Configure os secrets que podem ser no nível do **repositório** (todos environments) ou por **environment** (específico):
-
-### Secrets Obrigatórios
-
-| Secret | Nível | Descrição | Como Obter |
-|--------|-------|-----------|------------|
-| `AWS_ACCESS_KEY_ID` | Repo/Env | Chave de acesso AWS | Console IAM → Users → Security credentials |
-| `AWS_SECRET_ACCESS_KEY` | Repo/Env | Chave secreta AWS | Console IAM → Users → Security credentials |
-
-### Secrets Opcionais
-
-| Secret | Nível | Descrição | Quando Usar |
-|--------|-------|-----------|-------------|
-| `ECS_CLUSTER` | Environment | Override do cluster | Quando diferente da variável |
-| `ECS_TASK_EXECUTION_ROLE_ARN` | Environment | Override da role | Quando diferente da variável |
-
-## Permissões IAM Necessárias
-
-A chave AWS configurada deve ter as seguintes permissões:
-
-### Para ECR (Docker workflows)
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": [
-        "ecr:GetAuthorizationToken",
-        "ecr:BatchCheckLayerAvailability",
-        "ecr:InitiateLayerUpload",
-        "ecr:UploadLayerPart",
-        "ecr:CompleteLayerUpload",
-        "ecr:PutImage"
-      ],
-      "Resource": "*"
-    }
-  ]
-}
-```
-
-### Para ECS (Deploy workflows)
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": [
-        "ecs:RegisterTaskDefinition",
-        "ecs:UpdateService",
-        "ecs:DescribeServices",
-        "ecs:DescribeTaskDefinition",
-        "ecs:DescribeTasks",
-        "ecs:ListTasks"
-      ],
-      "Resource": "*"
-    },
-    {
-      "Effect": "Allow",
-      "Action": [
-        "iam:PassRole"
-      ],
-      "Resource": "arn:aws:iam::*:role/ecsTaskExecutionRole"
-    }
-  ]
-}
-```
-
-### Para ALB (APIs com Load Balancer)
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": [
-        "elasticloadbalancing:CreateTargetGroup",
-        "elasticloadbalancing:CreateListener",
-        "elasticloadbalancing:DescribeTargetGroups",
-        "elasticloadbalancing:DescribeListeners",
-        "elasticloadbalancing:ModifyTargetGroup",
-        "elasticloadbalancing:ModifyListener"
-      ],
-      "Resource": "*"
-    }
-  ]
-}
-```
-
-## Exemplo de Configuração
-
-### Environment `dev`
-
-**Variáveis:**
-```
-ECR_REGISTRY=123456789.dkr.ecr.us-east-1.amazonaws.com
-ECS_CLUSTER=meu-projeto-dev
-ECS_TASK_EXECUTION_ROLE_ARN=arn:aws:iam::123456789:role/ecsTaskExecutionRole-dev
-SUBNET_IDS=subnet-12345,subnet-67890
-SECURITY_GROUP_IDS=sg-abcdef
-LOAD_BALANCER_ARN=arn:aws:elasticloadbalancing:us-east-1:123456789:loadbalancer/app/dev-alb/1234567890
-TASK_CPU=512
-TASK_MEMORY=1024
-```
-
-**Secrets:** (no nível do repositório)
-```
-AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
-AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
-```
+As chaves AWS configuradas nos secrets da organização devem ter permissão para ECR (push de imagem), ECS (register task definition, update service), VPC (subnets, security groups) e, para APIs, ALB (target group, listener). Exemplos de políticas estão em [organization-variables.md](organization-variables.md) e na documentação AWS.
 
 ## Troubleshooting
 
-### Erros Comuns
+### Unknown environment
 
-#### ❌ `Unknown environment: staging`
-**Causa**: Environment não configurado no GitHub ou nome incorreto.
-**Solução**: Verifique se o environment existe em `Settings > Environments`.
+O job `prepare` falha com "Invalid environment" quando a branch não está mapeada no `case` (ex.: branch `staging` sem caso correspondente). Adicione um caso no `case` e crie `STAGING_CONFIG_DEPLOY` e os secrets na organização.
 
-#### ❌ `AWS credentials not provided`
-**Causa**: Secrets AWS não configurados.
-**Solução**: Configure `AWS_ACCESS_KEY_ID` e `AWS_SECRET_ACCESS_KEY`.
+### Variável ou secret vazio
 
-#### ❌ `ECR repository does not exist`
-**Causa**: Repositório ECR não existe ou nome incorreto.
-**Solução**: Crie o repositório no console ECR ou verifique o nome.
+Confirme que a variável `{ENV}_CONFIG_DEPLOY` existe, está acessível ao repositório e o valor é um JSON válido. Confirme que os secrets `{ENV}_AWS_ACCESS_KEY_ID` e `{ENV}_AWS_SECRET_ACCESS_KEY` existem e o repositório tem acesso. Ver [troubleshooting-env-vars.md](troubleshooting-env-vars.md).
 
-#### ❌ `ECS cluster not found`
-**Causa**: Cluster não existe ou região incorreta.
-**Solução**: Verifique se o cluster existe na região especificada.
+### ECR / ECS / rede
 
-#### ❌ `Invalid subnet ID`
-**Causa**: Subnet não existe ou não está na mesma VPC.
-**Solução**: Verifique os IDs das subnets no console VPC.
+Erros como "ECR repository does not exist", "ECS cluster not found", "Invalid subnet" indicam que os **valores dentro do JSON** estão incorretos ou desatualizados. Ajuste o conteúdo da variável `{ENV}_CONFIG_DEPLOY` na organização e valide com `jq` (ver troubleshooting-env-vars.md).
 
-#### ❌ `Target group creation failed`
-**Causa**: ALB não existe ou permissões insuficientes.
-**Solução**: Verifique se o ALB existe e se as permissões IAM estão corretas.
+## Próximos passos
 
-### Validações Automáticas
-
-Os workflows fazem as seguintes validações:
-
-- **Environment**: Deve ser `dev`, `qa`, `sbx` ou `prd`
-- **Service Type**: Deve ser `api` ou `worker`
-- **Technology**: Deve ser `dotnet` ou `node`
-- **AWS Credentials**: Devem estar presentes para workflows Docker/Deploy
-- **Required Variables**: ECR_REGISTRY, ECS_CLUSTER etc. devem estar definidas
-
-### Testando a Configuração
-
-Para testar se sua configuração está correta:
-
-1. **Faça um push** numa branch mapeada (ex: `develop` → `dev`)
-2. **Verifique os logs** do workflow na aba Actions
-3. **Procure por mensagens** `✅` de validação bem-sucedida
-4. **Se houver erros**, verifique as seções acima
-
-## Próximos Passos
-
-- Para detalhes dos workflows: Ver [`workflows.md`](workflows.md)
-- Para diagramas do pipeline: Ver [`diagramas.md`](diagramas.md)  
-- Para adaptar para seu projeto: Ver [`adaptacao.md`](adaptacao.md)
+- [Organization Variables](organization-variables.md) – Schema do JSON e convenção de nomes
+- [Deploy Env Pattern](deploy-env-pattern.md) – Template do job prepare com CONFIG_DEPLOY + jq
+- [Troubleshooting env vars](troubleshooting-env-vars.md) – Validação do JSON e problemas comuns
+- [Workflows](workflows.md) – Detalhes dos workflows compostos
+- [Diagramas](diagramas.md) – Fluxos e mapeamento branch → environment

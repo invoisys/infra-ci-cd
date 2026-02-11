@@ -225,6 +225,8 @@ Workflow de deploy para Amazon ECS Fargate com suporte a Application Load Balanc
 | `ECS_CLUSTER` | ❌ | Nome do cluster ECS |
 | `ECS_TASK_EXECUTION_ROLE_ARN` | ❌ | ARN da role de execução |
 
+**Config de deploy**: Os valores de `ecs_cluster`, `ecr_registry`, `subnet_ids`, `security_group_ids`, `load_balancer_name`, etc. costumam vir de um job `prepare` que lê a variável JSON `vars.{ENV}_CONFIG_DEPLOY` na organização, faz parse com `jq` e expõe via outputs. Secrets AWS vêm de `needs.prepare.outputs.aws_access_key` / `aws_secret_key`. Ver [deploy-env-pattern.md](deploy-env-pattern.md) e [organization-variables.md](organization-variables.md).
+
 ### Exemplo de Uso - API
 
 ```yaml
@@ -283,6 +285,7 @@ Mensagens de erro são padronizadas e incluem os valores aceitos.
 
 ## Próximos Passos
 
-- Para configuração de environments: Ver [`environments.md`](environments.md)
-- Para diagramas visuais: Ver [`diagramas.md`](diagramas.md)
-- Para guia de adaptação: Ver [`adaptacao.md`](adaptacao.md)
+- Para config de deploy (variável JSON por ambiente e secrets na organização): Ver [organization-variables.md](organization-variables.md) e [deploy-env-pattern.md](deploy-env-pattern.md)
+- Para uso de environments no repositório (aprovações, wait timer): Ver [environments.md](environments.md)
+- Para diagramas visuais: Ver [diagramas.md](diagramas.md)
+- Para guia de adaptação: Ver [adaptacao.md](adaptacao.md)

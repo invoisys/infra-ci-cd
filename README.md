@@ -39,27 +39,33 @@ graph LR
 
 ## 🚀 Quick Start
 
-### 1. Configure os environments no GitHub
+### 1. Configure a organização (config de deploy + secrets)
 
-Acesse `Settings > Environments` e crie: `dev`, `qa`, `sbx`, `prd`
+Na **organização** GitHub (Organization Settings → Secrets and variables → Actions):
 
-### 2. Configure variáveis e secrets
+- **Variables**: crie uma variável por ambiente com um JSON contendo ECR, ECS, rede, load balancer: `DEV_CONFIG_DEPLOY`, `QA_CONFIG_DEPLOY`, `SBX_CONFIG_DEPLOY`, `PRD_CONFIG_DEPLOY`. Schema em [Organization Variables](docs/organization-variables.md).
+- **Secrets**: por ambiente: `{ENV}_AWS_ACCESS_KEY_ID`, `{ENV}_AWS_SECRET_ACCESS_KEY`.
 
-Defina em cada environment:
-- `ECR_REGISTRY`, `ECS_CLUSTER`, `SUBNET_IDS` etc.
-- Secrets: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`
+(Opcional) Para aprovações ou wait timers, crie **environments** no repositório (`Settings > Environments`): `dev`, `qa`, `sbx`, `prd`.
 
-### 3. Crie seu workflow de deploy
+### 2. Crie seu workflow de deploy
+
+Inclua um job `prepare` que resolve o ambiente (branch), lê `vars.{ENV}_CONFIG_DEPLOY`, faz parse com `jq` e grava os outputs; os jobs `docker` e `deploy` usam `needs.prepare.outputs.*`. Valores de deploy vêm da organização; use `environment: ${{ github.ref_name }}` apenas onde precisar de approval/proteção.
 
 ```yaml
 name: Deploy
 
 on:
   push:
-    branches: [develop, qa, main]
+    branches: [dev, qa, sbx, prd]
 
 jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    # Resolve vars.{ENV}_CONFIG_DEPLOY + secrets e escreve ecr_registry, ecs_cluster, etc. nos outputs (ver deploy-env-pattern.md)
+
   build:
+    needs: [prepare]
     uses: ./.github/workflows/composite-build.yml
     with:
       technology: dotnet
@@ -67,29 +73,34 @@ jobs:
 
   test:
     uses: ./.github/workflows/composite-test.yml
+    needs: build
     with:
       technology: dotnet
-    needs: build
 
   docker:
+    needs: [test, prepare]
     uses: ./.github/workflows/composite-docker.yml
     with:
+      ecr_registry: ${{ needs.prepare.outputs.ecr_registry }}
       ecr_repo: minha-api
       service_type: api
       environment: ${{ github.ref_name }}
-    secrets: inherit
-    needs: [build, test]
+    secrets:
+      AWS_ACCESS_KEY_ID: ${{ needs.prepare.outputs.aws_access_key }}
+      AWS_SECRET_ACCESS_KEY: ${{ needs.prepare.outputs.aws_secret_key }}
 
   deploy:
+    needs: [docker, prepare]
     uses: ./.github/workflows/composite-deploy.yml
     with:
       image_uri: ${{ needs.docker.outputs.full_image_uri }}
       ecs_service: minha-api-${{ github.ref_name }}
+      ecs_cluster: ${{ needs.prepare.outputs.ecs_cluster }}
       environment: ${{ github.ref_name }}
       service_type: api
-    secrets: inherit
-    needs: docker
-    environment: ${{ github.ref_name }}
+    secrets:
+      AWS_ACCESS_KEY_ID: ${{ needs.prepare.outputs.aws_access_key }}
+      AWS_SECRET_ACCESS_KEY: ${{ needs.prepare.outputs.aws_secret_key }}
 ```
 
 ## 📚 Workflows Disponíveis
@@ -105,7 +116,8 @@ jobs:
 
 ### 🔧 Configuração
 - **[Workflows](docs/workflows.md)**: Documentação técnica completa de todos os workflows
-- **[Environments](docs/environments.md)**: Configuração de environments, variáveis e secrets
+- **[Organization Variables](docs/organization-variables.md)**: Variável JSON de config de deploy por ambiente e secrets na organização
+- **[Environments](docs/environments.md)**: Modelo recomendado (config na org) e uso de environments no repositório para aprovações
 - **[Diagramas](docs/diagramas.md)**: Visualizações dos fluxos e arquitetura
 
 ## ✨ Características

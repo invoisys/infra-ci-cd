@@ -49,7 +49,7 @@ graph TD
 
 ## 2. Mapeamento Branch → Environment
 
-Como as branches são mapeadas para environments com aprovações.
+Como as branches são mapeadas para environments (usados para aprovações e proteções). A **config de deploy** (ECR, ECS, rede, ALB) vem da **organização** (variável `{ENV}_CONFIG_DEPLOY` + secrets), não dos environments do repositório.
 
 ```mermaid
 graph LR
@@ -295,6 +295,7 @@ graph LR
 
 ## Próximos Passos
 
-- Para configurar environments: Ver [`environments.md`](environments.md)
-- Para detalhes dos workflows: Ver [`workflows.md`](workflows.md)
-- Para adaptar para seu projeto: Ver [`adaptacao.md`](adaptacao.md)
+- Para config de deploy na organização (variável JSON + secrets): Ver [organization-variables.md](organization-variables.md) e [deploy-env-pattern.md](deploy-env-pattern.md)
+- Para configurar environments no repositório (aprovações, wait timer): Ver [environments.md](environments.md)
+- Para detalhes dos workflows: Ver [workflows.md](workflows.md)
+- Para adaptar para seu projeto: Ver [adaptacao.md](adaptacao.md)
