@@ -95,7 +95,7 @@ jobs:
           echo "📦 Installing dependencies..."
           npm ci
           echo "🔨 Building..."
-          npm run build ${{ inputs.build_args }}
+          npm run build --if-present ${{ inputs.build_args }}
           echo "success=true" >> $GITHUB_OUTPUT
 
       - name: Set build success
