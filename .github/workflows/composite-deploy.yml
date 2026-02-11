@@ -23,6 +23,11 @@ on:
         description: 'Service type: api or worker'
         required: true
         type: string
+      ecs_cluster:
+        description: 'ECS cluster name'
+        required: true
+        type: string
+        default: ''
       
       # AWS & ECS Configuration
       aws_region:
@@ -30,11 +35,6 @@ on:
         required: false
         type: string
         default: 'us-east-1'
-      ecs_cluster:
-        description: 'ECS cluster name'
-        required: false
-        type: string
-        default: ''
       ecs_task_execution_role_arn:
         description: 'Task execution role ARN'
         required: false
@@ -83,34 +83,34 @@ on:
         description: 'CPU architecture (X86_64, ARM64)'
         required: false
         type: string
-        default: ''
+        default: 'X86_64'
       runtime_os_family:
         description: 'OS family (LINUX, WINDOWS_SERVER_2019_CORE)'
         required: false
         type: string
-        default: ''
+        default: 'LINUX'
       
       # Logging
       awslogs_mode:
         description: 'awslogs mode (non-blocking, blocking)'
         required: false
         type: string
-        default: ''
+        default: 'non-blocking'
       awslogs_create_group:
         description: 'Create log group if not exists'
         required: false
         type: string
-        default: ''
+        default: 'true'
       awslogs_max_buffer_size:
         description: 'Max buffer size'
         required: false
         type: string
-        default: ''
+        default: '25m'
       port_mapping_app_protocol:
         description: 'App protocol for port mapping'
         required: false
         type: string
-        default: ''
+        default: 'http'
       
       # Network Configuration
       subnet_ids:
@@ -213,42 +213,42 @@ on:
         description: 'Health check grace period'
         required: false
         type: string
-        default: ''
+        default: '0'
       deployment_circuit_breaker_enable:
         description: 'Enable deployment circuit breaker'
         required: false
         type: boolean
-        default: false
+        default: true
       deployment_circuit_breaker_rollback:
         description: 'Auto rollback on circuit breaker'
         required: false
         type: boolean
-        default: false
+        default: true
       capacity_provider_strategy:
         description: 'Capacity provider strategy'
         required: false
         type: string
-        default: ''
+        default: FARGATE_SPOT:0:4
       platform_version:
         description: 'Fargate platform version'
         required: false
         type: string
-        default: ''
+        default: '1.4.0'
       enable_execute_command:
         description: 'Enable ECS Exec'
         required: false
         type: boolean
-        default: false
+        default: true
       deployment_minimum_healthy_percent:
         description: 'Min healthy percent during deploy'
         required: false
         type: string
-        default: ''
+        default: '100'
       deployment_maximum_percent:
         description: 'Max percent during deploy'
         required: false
         type: string
-        default: ''
+        default: '200'
         
     secrets:
       AWS_ACCESS_KEY_ID:
