@@ -667,3 +667,4 @@ jobs:
         with:
           name: deploy-${{ inputs.environment }}-${{ inputs.ecs_service }}-${{ github.run_id }}
           path: .deploys
+          include-hidden-files: true
