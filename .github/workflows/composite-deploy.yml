@@ -35,6 +35,10 @@ on:
         required: false
         type: string
         default: 'us-east-1'
+      aws_role_arn:
+        description: 'IAM role ARN to assume via OIDC (no secrets)'
+        required: true
+        type: string
       ecs_task_execution_role_arn:
         description: 'Task execution role ARN'
         required: false
@@ -249,13 +253,7 @@ on:
         required: false
         type: string
         default: '200'
-        
-    secrets:
-      AWS_ACCESS_KEY_ID:
-        required: true
-      AWS_SECRET_ACCESS_KEY:
-        required: true
-        
+
     outputs:
       service_arn:
         description: 'ECS service ARN'
@@ -297,17 +295,15 @@ jobs:
           [ -z "${{ inputs.ecs_service }}" ] && echo "❌ ecs_service is required" && exit 1
           echo "✅ All required inputs provided"
 
-      - name: Validate secrets
+      - name: Validate aws_role_arn
         run: |
-          [ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ] && echo "❌ AWS_ACCESS_KEY_ID not provided" && exit 1
-          [ -z "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ] && echo "❌ AWS_SECRET_ACCESS_KEY not provided" && exit 1
-          echo "✅ AWS credentials provided"
+          [ -z "${{ inputs.aws_role_arn }}" ] && echo "❌ aws_role_arn is required (OIDC)" && exit 1
+          echo "✅ aws_role_arn provided"
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: ${{ inputs.aws_role_arn }}
           aws-region: ${{ inputs.aws_region }}
 
       - name: Register Task Definition
