@@ -15,26 +15,33 @@ graph LR
     A[📝 Push] --> B[🔨 Build]
     B --> C[🧪 Test]
     C --> D[🐳 Docker]
-    D --> E[🚀 Deploy]
+    C --> D2[📦 Package]
+    D --> E[🚀 Deploy ECS]
+    D2 --> E2[⚡ Deploy Lambda]
     
     subgraph "Outputs"
         F[📦 Artifacts]
         G[🧪 Coverage]
         H[🐳 ECR Image]
         I[🚀 ECS Service]
+        J[⚡ Lambda]
     end
     
     B --> F
     C --> G
     D --> H
     E --> I
+    D2 --> J
+    E2 --> J
     
     style A fill:#e3f2fd
     style E fill:#e8f5e8
+    style E2 fill:#e8f5e8
     style F fill:#fff3e0
     style G fill:#fff3e0
     style H fill:#fff3e0
     style I fill:#fff3e0
+    style J fill:#fff3e0
 ```
 
 ## 🚀 Quick Start
@@ -111,11 +118,14 @@ jobs:
 | 🧪 [`composite-test`](docs/workflows.md#composite-test) | Execução de testes com cobertura | .NET, Node.js | Validação de qualidade |
 | 🐳 [`composite-docker`](docs/workflows.md#composite-docker) | Build e push para ECR | Docker, AWS ECR | Criação de imagens |
 | 🚀 [`composite-deploy`](docs/workflows.md#composite-deploy) | Deploy para ECS Fargate + ALB | AWS ECS, ALB | Deploy em produção |
+| ⚡ [`composite-deploy-lambda`](docs/deploy-lambda.md) | Deploy para Lambda via ZIP/S3 | AWS Lambda | Funções serverless |
 
 ## 📖 Documentação Especializada
 
 ### 🔧 Configuração
+- **[Guia de Migração de Serviços](docs/guia-migracao-servicos.md)**: Passo a passo GitLab→GitHub (import de todas as branches), criação de deploy.yml e migração por tipo (já ECS, ex-EKS, Lambda)
 - **[Workflows](docs/workflows.md)**: Documentação técnica completa de todos os workflows
+- **[Deploy Lambda](docs/deploy-lambda.md)**: Deploy idempotente de AWS Lambda via ZIP/S3
 - **[Organization Variables](docs/organization-variables.md)**: Variável JSON de config de deploy por ambiente e secrets na organização
 - **[Environments](docs/environments.md)**: Modelo recomendado (config na org) e uso de environments no repositório para aprovações
 - **[Diagramas](docs/diagramas.md)**: Visualizações dos fluxos e arquitetura

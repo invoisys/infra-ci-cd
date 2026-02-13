@@ -1,0 +1,101 @@
+# Exemplo completo: pipeline Build → Test → Package → Deploy Lambda
+# Copie para .github/workflows/ do seu repositório e ajuste prepare, bucket e nomes.
+# Triggers (API Gateway, SQS, etc.) devem ser configurados fora deste workflow.
+
+name: Deploy Lambda
+
+on:
+  push:
+    branches: [dev, qa, prd]
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ github.ref_name }}
+      aws_role_arn: ${{ steps.config.outputs.aws_role_arn }}
+      lambda_role_arn: ${{ steps.config.outputs.lambda_role_arn }}
+      lambda_bucket: ${{ steps.config.outputs.lambda_bucket }}
+    steps:
+      - name: Parse environment config
+        id: config
+        run: |
+          # Exemplo: ler vars.{ENV}_CONFIG_DEPLOY da organização (JSON) e extrair ARNs e bucket
+          # DEV_CONFIG_DEPLOY = {"aws_role_arn":"arn:...","lambda_role_arn":"arn:...","lambda_bucket":"my-bucket"}
+          ENV="${{ github.ref_name }}"
+          CONFIG="${{ vars[format('{0}_CONFIG_DEPLOY', env.ENV)] }}"
+          if [ -n "$CONFIG" ]; then
+            echo "aws_role_arn=$(echo "$CONFIG" | jq -r '.aws_role_arn')" >> $GITHUB_OUTPUT
+            echo "lambda_role_arn=$(echo "$CONFIG" | jq -r '.lambda_role_arn')" >> $GITHUB_OUTPUT
+            echo "lambda_bucket=$(echo "$CONFIG" | jq -r '.lambda_bucket')" >> $GITHUB_OUTPUT
+          else
+            echo "aws_role_arn=arn:aws:iam::123456789012:role/github-oidc" >> $GITHUB_OUTPUT
+            echo "lambda_role_arn=arn:aws:iam::123456789012:role/my-lambda-role" >> $GITHUB_OUTPUT
+            echo "lambda_bucket=my-lambda-artifacts" >> $GITHUB_OUTPUT
+          fi
+
+  build:
+    uses: ./.github/workflows/composite-build.yml
+    with:
+      technology: dotnet
+      technology_version: "8.0"
+      working_directory: src
+
+  test:
+    needs: build
+    uses: ./.github/workflows/composite-test.yml
+    with:
+      technology: dotnet
+      working_directory: src
+
+  package:
+    needs: [test, prepare]
+    runs-on: ubuntu-latest
+    outputs:
+      s3_key: ${{ steps.upload.outputs.s3_key }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0"
+
+      - name: Publish Lambda
+        run: |
+          cd src/MyLambdaFunction
+          dotnet publish -c Release -o publish
+          cd publish
+          zip -r ../lambda-package.zip .
+
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ needs.prepare.outputs.aws_role_arn }}
+          aws-region: us-east-1
+
+      - name: Upload to S3
+        id: upload
+        run: |
+          S3_KEY="lambda-packages/${{ github.sha }}/lambda.zip"
+          aws s3 cp src/MyLambdaFunction/lambda-package.zip \
+            "s3://${{ needs.prepare.outputs.lambda_bucket }}/${S3_KEY}"
+          echo "s3_key=${S3_KEY}" >> $GITHUB_OUTPUT
+
+  deploy:
+    needs: [package, prepare]
+    uses: ./.github/workflows/composite-deploy-lambda.yml
+    with:
+      lambda_function_name: my-lambda-${{ needs.prepare.outputs.environment }}
+      s3_bucket: ${{ needs.prepare.outputs.lambda_bucket }}
+      s3_key: ${{ needs.package.outputs.s3_key }}
+      runtime: dotnet8
+      handler: MyLambdaFunction::Handler::FunctionHandler
+      environment: ${{ needs.prepare.outputs.environment }}
+      lambda_role_arn: ${{ needs.prepare.outputs.lambda_role_arn }}
+      aws_role_arn: ${{ needs.prepare.outputs.aws_role_arn }}
+      aws_region: us-east-1
+      memory_size: "1024"
+      timeout: "30"
+      publish_version: true
+      create_alias: true
+      alias_name: ${{ needs.prepare.outputs.environment }}
+      environment_variables: '{"LOG_LEVEL":"INFO","ENV":"${{ needs.prepare.outputs.environment }}"}'

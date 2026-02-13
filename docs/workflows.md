@@ -10,6 +10,7 @@ Os workflows compostos são blocos reutilizáveis que encapsulam funcionalidades
 - **composite-test.yml**: Execução de testes com cobertura
 - **composite-docker.yml**: Build e push de imagens Docker para ECR
 - **composite-deploy.yml**: Deploy para ECS Fargate com ALB (APIs)
+- **composite-deploy-lambda.yml**: Deploy para AWS Lambda via ZIP/S3
 
 ## composite-build
 
@@ -272,6 +273,77 @@ jobs:
     needs: docker
     environment: dev
 ```
+
+---
+
+## composite-deploy-lambda
+
+Workflow de deploy idempotente para AWS Lambda via código em ZIP no S3. Triggers (API Gateway, SQS, EventBridge, etc.) devem ser configurados separadamente.
+
+### Inputs
+
+#### Obrigatórios
+
+| Nome | Tipo | Descrição |
+|------|------|-----------|
+| `lambda_function_name` | string | Nome da função Lambda |
+| `s3_bucket` | string | Bucket S3 do código |
+| `s3_key` | string | Chave S3 do arquivo ZIP |
+| `runtime` | string | Runtime (python3.11, nodejs20.x, dotnet8, etc.) |
+| `handler` | string | Handler da função |
+| `environment` | string | Ambiente (dev\|qa\|sbx\|prd) |
+| `aws_role_arn` | string | ARN da role IAM para OIDC |
+| `lambda_role_arn` | string | ARN da execution role da Lambda |
+
+#### Opcionais
+
+| Nome | Tipo | Padrão | Descrição |
+|------|------|--------|-----------|
+| `aws_region` | string | `us-east-1` | Região AWS |
+| `memory_size` | string | `512` | Memória MB (128-10240, múltiplo 64) |
+| `timeout` | string | `30` | Timeout segundos (1-900) |
+| `environment_variables` | string | `{}` | JSON de variáveis de ambiente |
+| `vpc_subnet_ids` | string | `` | Subnet IDs (vírgula) |
+| `vpc_security_group_ids` | string | `` | Security group IDs (vírgula) |
+| `publish_version` | boolean | `true` | Publicar versão após deploy |
+| `create_alias` | boolean | `false` | Criar/atualizar alias |
+| `alias_name` | string | `latest` | Nome do alias |
+| `layers` | string | `` | ARNs de Layers (vírgula) |
+| `reserved_concurrent_executions` | string | `-1` | Concorrência reservada |
+
+### Outputs
+
+| Nome | Descrição |
+|------|-----------|
+| `lambda_arn` | ARN da função Lambda |
+| `lambda_version` | Versão publicada |
+| `lambda_qualified_arn` | ARN com versão ou alias |
+| `deploy_metadata_artifact` | Nome do artifact com metadata do deploy |
+
+### Exemplo de Uso
+
+```yaml
+jobs:
+  deploy:
+    needs: [package, prepare]
+    uses: ./.github/workflows/composite-deploy-lambda.yml
+    with:
+      lambda_function_name: my-lambda-${{ needs.prepare.outputs.environment }}
+      s3_bucket: ${{ needs.prepare.outputs.lambda_bucket }}
+      s3_key: ${{ needs.package.outputs.s3_key }}
+      runtime: dotnet8
+      handler: MyLambdaFunction::Handler::FunctionHandler
+      environment: ${{ needs.prepare.outputs.environment }}
+      lambda_role_arn: ${{ needs.prepare.outputs.lambda_role_arn }}
+      aws_role_arn: ${{ needs.prepare.outputs.aws_role_arn }}
+      publish_version: true
+      create_alias: true
+      alias_name: ${{ needs.prepare.outputs.environment }}
+```
+
+Documentação completa: [deploy-lambda.md](deploy-lambda.md).
+
+---
 
 ## Validação de Inputs
 

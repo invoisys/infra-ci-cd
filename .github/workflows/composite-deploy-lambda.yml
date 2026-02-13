@@ -1,0 +1,397 @@
+# Composite Deploy Lambda Workflow
+# Deploy AWS Lambda function via ZIP/S3 (idempotent). Triggers (API Gateway, SQS, etc.) are configured manually.
+
+name: Deploy Lambda
+
+on:
+  workflow_call:
+    inputs:
+      # Obrigatórios
+      lambda_function_name:
+        description: 'Nome da função Lambda'
+        required: true
+        type: string
+      s3_bucket:
+        description: 'S3 bucket para código Lambda'
+        required: true
+        type: string
+      s3_key:
+        description: 'S3 key do arquivo ZIP'
+        required: true
+        type: string
+      runtime:
+        description: 'Runtime (python3.11, nodejs20.x, dotnet8, etc)'
+        required: true
+        type: string
+      handler:
+        description: 'Handler (ex: index.handler, app.lambda_handler)'
+        required: true
+        type: string
+      environment:
+        description: 'Ambiente (dev|qa|sbx|prd)'
+        required: true
+        type: string
+      # AWS Configuration
+      aws_region:
+        description: 'AWS region'
+        required: false
+        type: string
+        default: 'us-east-1'
+      aws_role_arn:
+        description: 'IAM role ARN para OIDC'
+        required: true
+        type: string
+      # Lambda Configuration
+      lambda_role_arn:
+        description: 'ARN da execution role da Lambda'
+        required: true
+        type: string
+      memory_size:
+        description: 'Memória em MB (128-10240, múltiplo de 64)'
+        required: false
+        type: string
+        default: '512'
+      timeout:
+        description: 'Timeout em segundos (1-900)'
+        required: false
+        type: string
+        default: '30'
+      environment_variables:
+        description: 'JSON object de variáveis de ambiente'
+        required: false
+        type: string
+        default: '{}'
+      # VPC Configuration (opcional)
+      vpc_subnet_ids:
+        description: 'Subnet IDs (comma-separated)'
+        required: false
+        type: string
+        default: ''
+      vpc_security_group_ids:
+        description: 'Security group IDs (comma-separated)'
+        required: false
+        type: string
+        default: ''
+      # Versioning & Alias
+      publish_version:
+        description: 'Publicar nova versão após deploy'
+        required: false
+        type: boolean
+        default: true
+      create_alias:
+        description: 'Criar/atualizar alias'
+        required: false
+        type: boolean
+        default: false
+      alias_name:
+        description: 'Nome do alias (ex: dev, prd, latest)'
+        required: false
+        type: string
+        default: 'latest'
+      # Advanced
+      layers:
+        description: 'Lambda Layer ARNs (comma-separated)'
+        required: false
+        type: string
+        default: ''
+      reserved_concurrent_executions:
+        description: 'Reserved concurrent executions (-1 unreserved)'
+        required: false
+        type: string
+        default: '-1'
+
+    outputs:
+      lambda_arn:
+        description: 'ARN da função Lambda'
+        value: ${{ jobs.deploy.outputs.lambda_arn }}
+      lambda_version:
+        description: 'Versão publicada da Lambda'
+        value: ${{ jobs.deploy.outputs.lambda_version }}
+      lambda_qualified_arn:
+        description: 'ARN com versão ou alias'
+        value: ${{ jobs.deploy.outputs.lambda_qualified_arn }}
+      deploy_metadata_artifact:
+        description: 'Nome do artifact com metadata do deploy'
+        value: ${{ jobs.deploy.outputs.deploy_metadata_artifact }}
+
+jobs:
+  deploy:
+    name: Deploy Lambda
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    outputs:
+      lambda_arn: ${{ steps.deploy.outputs.lambda_arn }}
+      lambda_version: ${{ steps.qualified.outputs.version_out }}
+      lambda_qualified_arn: ${{ steps.qualified.outputs.qualified_arn }}
+      deploy_metadata_artifact: ${{ steps.metadata.outputs.artifact_name }}
+
+    steps:
+      - name: Validate inputs
+        run: |
+          set -e
+          # Environment
+          case "${{ inputs.environment }}" in
+            dev|qa|sbx|prd) echo "✅ Environment: ${{ inputs.environment }}" ;;
+            *) echo "❌ Invalid environment: ${{ inputs.environment }}" && exit 1 ;;
+          esac
+          # Runtime (lista comum AWS)
+          case "${{ inputs.runtime }}" in
+            nodejs18.x|nodejs20.x|nodejs22.x|python3.10|python3.11|python3.12|dotnet6|dotnet8|java17|java21) echo "✅ Runtime: ${{ inputs.runtime }}" ;;
+            *) echo "⚠️ Runtime ${{ inputs.runtime }} (validar compatibilidade AWS)" ;;
+          esac
+          # Handler não vazio
+          [ -z "${{ inputs.handler }}" ] && echo "❌ handler is required" && exit 1
+          echo "✅ Handler: ${{ inputs.handler }}"
+          # Memory: 128-10240, múltiplo de 64
+          MEM=${{ inputs.memory_size }}
+          if ! echo "$MEM" | grep -qE '^[0-9]+$'; then
+            echo "❌ memory_size must be numeric" && exit 1
+          fi
+          if [ "$MEM" -lt 128 ] || [ "$MEM" -gt 10240 ]; then
+            echo "❌ memory_size must be 128-10240" && exit 1
+          fi
+          if [ $((MEM % 64)) -ne 0 ]; then
+            echo "❌ memory_size must be multiple of 64" && exit 1
+          fi
+          echo "✅ Memory: ${MEM} MB"
+          # Timeout: 1-900
+          TO=${{ inputs.timeout }}
+          if ! echo "$TO" | grep -qE '^[0-9]+$'; then
+            echo "❌ timeout must be numeric" && exit 1
+          fi
+          if [ "$TO" -lt 1 ] || [ "$TO" -gt 900 ]; then
+            echo "❌ timeout must be 1-900 seconds" && exit 1
+          fi
+          echo "✅ Timeout: ${TO}s"
+          # Alias: se create_alias então alias_name obrigatório
+          if [ "${{ inputs.create_alias }}" = "true" ]; then
+            [ -z "${{ inputs.alias_name }}" ] && echo "❌ alias_name is required when create_alias is true" && exit 1
+            echo "✅ Alias: ${{ inputs.alias_name }}"
+          fi
+          # VPC: se subnet_ids então security_group_ids obrigatório
+          if [ -n "${{ inputs.vpc_subnet_ids }}" ]; then
+            [ -z "${{ inputs.vpc_security_group_ids }}" ] && echo "❌ vpc_security_group_ids required when vpc_subnet_ids is set" && exit 1
+            echo "✅ VPC config provided"
+          fi
+          # Required
+          [ -z "${{ inputs.lambda_function_name }}" ] && echo "❌ lambda_function_name is required" && exit 1
+          [ -z "${{ inputs.s3_bucket }}" ] && echo "❌ s3_bucket is required" && exit 1
+          [ -z "${{ inputs.s3_key }}" ] && echo "❌ s3_key is required" && exit 1
+          [ -z "${{ inputs.lambda_role_arn }}" ] && echo "❌ lambda_role_arn is required" && exit 1
+          [ -z "${{ inputs.aws_role_arn }}" ] && echo "❌ aws_role_arn is required (OIDC)" && exit 1
+          echo "✅ All required inputs provided"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ inputs.aws_role_arn }}
+          aws-region: ${{ inputs.aws_region }}
+
+      - name: Deploy Lambda (create or update)
+        id: deploy
+        env:
+          FUNCTION_NAME: ${{ inputs.lambda_function_name }}
+          S3_BUCKET: ${{ inputs.s3_bucket }}
+          S3_KEY: ${{ inputs.s3_key }}
+          RUNTIME: ${{ inputs.runtime }}
+          HANDLER: ${{ inputs.handler }}
+          MEMORY_SIZE: ${{ inputs.memory_size }}
+          TIMEOUT: ${{ inputs.timeout }}
+          LAMBDA_ROLE_ARN: ${{ inputs.lambda_role_arn }}
+          INPUT_ENV_VARS: ${{ inputs.environment_variables }}
+          VPC_SUBNET_IDS: ${{ inputs.vpc_subnet_ids }}
+          VPC_SECURITY_GROUP_IDS: ${{ inputs.vpc_security_group_ids }}
+          LAYERS: ${{ inputs.layers }}
+          RESERVED_CONCURRENT: ${{ inputs.reserved_concurrent_executions }}
+        run: |
+          set -e
+          echo "📦 Lambda: $FUNCTION_NAME | S3: s3://$S3_BUCKET/$S3_KEY"
+          
+          # Normalize env JSON (vazio = {})
+          if [ -z "$INPUT_ENV_VARS" ] || [ "$INPUT_ENV_VARS" = "" ]; then
+            INPUT_ENV_VARS='{}'
+          fi
+          echo "$INPUT_ENV_VARS" | jq -e . >/dev/null 2>&1 || { echo "❌ environment_variables must be valid JSON" && exit 1; }
+          
+          # Check if Lambda exists
+          LAMBDA_EXISTS=false
+          aws lambda get-function --function-name "$FUNCTION_NAME" >/dev/null 2>&1 && LAMBDA_EXISTS=true
+          echo "lambda_exists=${LAMBDA_EXISTS}" >> $GITHUB_OUTPUT
+          
+          ENV_FILE=$(mktemp)
+          trap "rm -f $ENV_FILE" EXIT
+          echo "{\"Variables\": $(echo "$INPUT_ENV_VARS" | jq -c .)}" > "$ENV_FILE"
+          
+          if [ "$LAMBDA_EXISTS" = "true" ]; then
+            echo "🔄 Lambda exists: updating configuration..."
+            CURRENT_CONFIG=$(aws lambda get-function-configuration --function-name "$FUNCTION_NAME")
+            CURRENT_ENV=$(echo "$CURRENT_CONFIG" | jq -r '.Environment.Variables // {} | @json')
+            [ "$CURRENT_ENV" = "null" ] && CURRENT_ENV='{}'
+            
+            # Merge idempotente: existente * input (input sobrescreve por chave)
+            MERGED_ENV=$(echo "$CURRENT_ENV" "$INPUT_ENV_VARS" | jq -s '.[0] * .[1]')
+            echo "{\"Variables\": $(echo "$MERGED_ENV" | jq -c .)}" > "$ENV_FILE"
+            
+            aws lambda update-function-configuration \
+              --function-name "$FUNCTION_NAME" \
+              --runtime "$RUNTIME" \
+              --handler "$HANDLER" \
+              --memory-size "$MEMORY_SIZE" \
+              --timeout "$TIMEOUT" \
+              --role "$LAMBDA_ROLE_ARN" \
+              --environment "file://${ENV_FILE}" \
+              --output json > /dev/null
+            
+            if [ -n "$VPC_SUBNET_IDS" ] && [ -n "$VPC_SECURITY_GROUP_IDS" ]; then
+              VPC_FILE=$(mktemp)
+              SUBNETS=$(echo "$VPC_SUBNET_IDS" | tr ',' '\n' | jq -R . | jq -s .)
+              SGS=$(echo "$VPC_SECURITY_GROUP_IDS" | tr ',' '\n' | jq -R . | jq -s .)
+              jq -n --argjson s "$SUBNETS" --argjson g "$SGS" '{SubnetIds:$s,SecurityGroupIds:$g}' > "$VPC_FILE"
+              aws lambda update-function-configuration --function-name "$FUNCTION_NAME" --vpc-config "file://${VPC_FILE}" --output json > /dev/null
+              rm -f "$VPC_FILE"
+            fi
+            
+            if [ -n "$LAYERS" ]; then
+              LAYER_ARNS=$(echo "$LAYERS" | tr ',' '\n' | jq -R . | jq -s .)
+              aws lambda update-function-configuration --function-name "$FUNCTION_NAME" --layers "$(echo "$LAYER_ARNS" | jq -c .)" --output json > /dev/null
+            fi
+            
+            if [ -n "$RESERVED_CONCURRENT" ] && [ "$RESERVED_CONCURRENT" != "-1" ]; then
+              aws lambda put-function-concurrency --function-name "$FUNCTION_NAME" --reserved-concurrent-executions "$RESERVED_CONCURRENT" 2>/dev/null || true
+            else
+              aws lambda delete-function-concurrency --function-name "$FUNCTION_NAME" 2>/dev/null || true
+            fi
+          else
+            echo "🆕 Lambda does not exist: creating..."
+            CREATE_JSON=$(jq -n \
+              --arg fn "$FUNCTION_NAME" \
+              --arg rt "$RUNTIME" \
+              --arg h "$HANDLER" \
+              --argjson mem "$MEMORY_SIZE" \
+              --argjson to "$TIMEOUT" \
+              --arg role "$LAMBDA_ROLE_ARN" \
+              --arg bucket "$S3_BUCKET" \
+              --arg key "$S3_KEY" \
+              --argjson env "$(echo "$INPUT_ENV_VARS" | jq -c .)" \
+              '{FunctionName:$fn,Runtime:$rt,Handler:$h,MemorySize:$mem,Timeout:$to,Role:$role,Code:{S3Bucket:$bucket,S3Key:$key},Environment:{Variables:$env}}')
+            if [ -n "$VPC_SUBNET_IDS" ] && [ -n "$VPC_SECURITY_GROUP_IDS" ]; then
+              SUBNETS=$(echo "$VPC_SUBNET_IDS" | tr ',' '\n' | jq -R . | jq -s .)
+              SGS=$(echo "$VPC_SECURITY_GROUP_IDS" | tr ',' '\n' | jq -R . | jq -s .)
+              CREATE_JSON=$(echo "$CREATE_JSON" | jq --argjson s "$SUBNETS" --argjson g "$SGS" '. + {VpcConfig:{SubnetIds:$s,SecurityGroupIds:$g}}')
+            fi
+            if [ -n "$LAYERS" ]; then
+              LAYER_ARNS=$(echo "$LAYERS" | tr ',' '\n' | jq -R . | jq -s .)
+              CREATE_JSON=$(echo "$CREATE_JSON" | jq --argjson l "$LAYER_ARNS" '. + {Layers:$l}')
+            fi
+            CREATE_FILE=$(mktemp)
+            echo "$CREATE_JSON" > "$CREATE_FILE"
+            aws lambda create-function --cli-input-json "file://${CREATE_FILE}" --output json > /dev/null
+            rm -f "$CREATE_FILE"
+            
+            if [ -n "$RESERVED_CONCURRENT" ] && [ "$RESERVED_CONCURRENT" != "-1" ]; then
+              aws lambda put-function-concurrency --function-name "$FUNCTION_NAME" --reserved-concurrent-executions "$RESERVED_CONCURRENT" 2>/dev/null || true
+            fi
+          fi
+          
+          # Always update code (idempotent)
+          echo "📤 Updating function code..."
+          aws lambda update-function-code --function-name "$FUNCTION_NAME" --s3-bucket "$S3_BUCKET" --s3-key "$S3_KEY" --output json > /dev/null
+          
+          echo "⏳ Waiting for function to be updated..."
+          aws lambda wait function-updated-v2 --function-name "$FUNCTION_NAME"
+          
+          LAMBDA_ARN=$(aws lambda get-function --function-name "$FUNCTION_NAME" --query 'Configuration.FunctionArn' --output text)
+          echo "lambda_arn=${LAMBDA_ARN}" >> $GITHUB_OUTPUT
+          echo "✅ Function ready: $LAMBDA_ARN"
+
+      - name: Publish version
+        id: version
+        if: inputs.publish_version
+        env:
+          FUNCTION_NAME: ${{ inputs.lambda_function_name }}
+        run: |
+          VER=$(aws lambda publish-version --function-name "$FUNCTION_NAME" --query 'Version' --output text)
+          echo "version=${VER}" >> $GITHUB_OUTPUT
+          echo "✅ Published version: $VER"
+
+      - name: Create or update alias
+        id: alias
+        if: inputs.create_alias
+        env:
+          FUNCTION_NAME: ${{ inputs.lambda_function_name }}
+          ALIAS_NAME: ${{ inputs.alias_name }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if [ -z "$VERSION" ]; then
+            VERSION=$(aws lambda get-function --function-name "$FUNCTION_NAME" --query 'Configuration.Version' --output text)
+          fi
+          if aws lambda get-alias --function-name "$FUNCTION_NAME" --name "$ALIAS_NAME" >/dev/null 2>&1; then
+            aws lambda update-alias --function-name "$FUNCTION_NAME" --name "$ALIAS_NAME" --function-version "$VERSION" --output json > /dev/null
+            echo "✅ Alias $ALIAS_NAME updated to version $VERSION"
+          else
+            aws lambda create-alias --function-name "$FUNCTION_NAME" --name "$ALIAS_NAME" --function-version "$VERSION" --output json > /dev/null
+            echo "✅ Alias $ALIAS_NAME created -> $VERSION"
+          fi
+          QUALIFIED_ARN=$(aws lambda get-alias --function-name "$FUNCTION_NAME" --name "$ALIAS_NAME" --query 'AliasArn' --output text)
+          echo "qualified_arn=${QUALIFIED_ARN}" >> $GITHUB_OUTPUT
+
+      - name: Set qualified ARN and version outputs
+        id: qualified
+        run: |
+          ARN="${{ steps.deploy.outputs.lambda_arn }}"
+          VER="${{ steps.version.outputs.version }}"
+          if [ "${{ inputs.create_alias }}" = "true" ] && [ -n "${{ steps.alias.outputs.qualified_arn }}" ]; then
+            echo "qualified_arn=${{ steps.alias.outputs.qualified_arn }}" >> $GITHUB_OUTPUT
+          elif [ -n "$VER" ]; then
+            echo "qualified_arn=${ARN}:${VER}" >> $GITHUB_OUTPUT
+          else
+            echo "qualified_arn=${ARN}" >> $GITHUB_OUTPUT
+          fi
+          echo "version_out=${VER}" >> $GITHUB_OUTPUT
+
+      - name: Generate deploy metadata
+        id: metadata
+        if: success()
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          FUNCTION_NAME: ${{ inputs.lambda_function_name }}
+          S3_BUCKET: ${{ inputs.s3_bucket }}
+          S3_KEY: ${{ inputs.s3_key }}
+          LAMBDA_ARN: ${{ steps.deploy.outputs.lambda_arn }}
+          LAMBDA_VERSION: ${{ steps.qualified.outputs.version_out }}
+          QUALIFIED_ARN: ${{ steps.qualified.outputs.qualified_arn }}
+        run: |
+          ARTIFACT_NAME="deploy-lambda-${{ inputs.environment }}-${{ inputs.lambda_function_name }}-${{ github.run_id }}"
+          mkdir -p .deploys
+          jq -n \
+            --arg env "$ENVIRONMENT" \
+            --arg fn "$FUNCTION_NAME" \
+            --arg s3bucket "$S3_BUCKET" \
+            --arg s3key "$S3_KEY" \
+            --arg arn "$LAMBDA_ARN" \
+            --arg version "${LAMBDA_VERSION:-}" \
+            --arg alias "${QUALIFIED_ARN:-}" \
+            --arg sha "${{ github.sha }}" \
+            --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg rid "${{ github.run_id }}" \
+            '{
+              environment: $env,
+              lambda_function: $fn,
+              s3_bucket: $s3bucket,
+              s3_key: $s3key,
+              lambda_arn: $arn,
+              lambda_version: $version,
+              alias_arn: $alias,
+              commit_sha: $sha,
+              timestamp: $ts,
+              run_id: $rid
+            }' > .deploys/deploy-lambda.json
+          echo "artifact_name=${ARTIFACT_NAME}" >> $GITHUB_OUTPUT
+
+      - name: Upload deploy metadata
+        uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: deploy-lambda-${{ inputs.environment }}-${{ inputs.lambda_function_name }}-${{ github.run_id }}
+          path: .deploys
+          include-hidden-files: true
