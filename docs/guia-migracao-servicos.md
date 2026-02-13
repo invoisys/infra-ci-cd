@@ -214,7 +214,7 @@ A aplicação deve responder no **mesmo path** que a listener rule do ALB (ex.: 
 
 ### 4.4 Checklist EKS → ECS
 
-- [ ] Atualizar SDK invoisys (e data models) e validar build e testes.
+- [ ] Atualizar SDK invoisys e validar build e testes.
 - [ ] **(APIs)** Configurar path base na aplicação e no deploy.yml (`listener_rule_path_pattern`, `listener_rule_host_header`, `target_group_health_check_path`).
 - [ ] **(Workers)** Revisar variáveis de ambiente e secrets; replicar no prepare e em `container_environment`.
 - [ ] Executar import GitLab → GitHub e criação de deploy.yml conforme seções 1 e 2.
