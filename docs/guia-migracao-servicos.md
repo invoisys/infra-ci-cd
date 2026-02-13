@@ -185,8 +185,8 @@ Serviços que vêm do **EKS** (ex.: API.Fatura, AgendadorNFSe, SendToABBYY) exig
 
 ### 4.1 SDK Invoisys (ex-EKS .NET)
 
-- Atualize os pacotes NuGet **invoisys.SDK\*** e **invoisys.DataModels\*** para versões compatíveis com o runtime ECS atual (ex.: 1.8.x para SDK; 3.0.x para DataModels, conforme exemplos).
-- **Referência:** [AgendadorNFSe.csproj](../../exemplos-migracao-github/AgendadorNFSe/src/AgendadorNFSe/AgendadorNFSe.csproj): invoisys.SDK 1.8.2, invoisys.SDK.Message 1.2.8; [API.Fatura.csproj](../../exemplos-migracao-github/API.Fatura/src/API.Fatura/API.Fatura.csproj): invoisys.SDK.* 1.8.2, invoisys.DataModels.* 3.0.7.
+- Atualize o pacote NuGet **invoisys.SDK\*** para versões compatíveis com o runtime ECS atual (ex.: 1.8.x para SDK; 3.0.x conforme exemplos).
+- **Referência:** [AgendadorNFSe.csproj](../../exemplos-migracao-github/AgendadorNFSe/src/AgendadorNFSe/AgendadorNFSe.csproj): invoisys.SDK 1.8.2, invoisys.SDK.Message 1.2.8; [API.Fatura.csproj](../../exemplos-migracao-github/API.Fatura/src/API.Fatura/API.Fatura.csproj): invoisys.SDK.* 1.8.2
 - **Na execução:** Analise o histórico Git dos repositórios reais (commits de atualização de .csproj) para documentar versões antigas → novas e breaking changes, se houver, e incorpore ao guia ou a um runbook do serviço.
 
 ### 4.2 API atrás do ALB com path base
